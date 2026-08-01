@@ -122,11 +122,16 @@ and a runner can assert the resulting layout.
 - ✅ Installer validated end-to-end in a **real armv7l userland** (Debian
   bookworm `linux/arm/v7` container): version resolution, published-checksum
   verification, 269 MB unpack, wrapper generation, OTA probe, idempotent re-run.
+- ✅ **The emulated binary runs**: `codex --version` answers under *both* engines
+  from that armv7l userland — ~10 s on the fork, ~6 s on 7.2 — and that is with
+  one more layer of emulation than the pad has (the container's armv7 userland is
+  itself driven by `qemu-arm` on the host).
 - ✅ Runs unprivileged into a custom prefix, refuses a 64-bit host by default,
   degrades gracefully with no systemd / no `binfmt_misc` / no `apt`.
-- ⏳ **Not yet run on the pad itself.** The emulated smoke test (`codex --version`
-  through the fork engine) needs the board — a container on an x86/arm64 host
-  would nest one emulator inside another. Report what you get.
+- ⏳ **Not yet run on the pad itself**: TUI stability over a long session, a real
+  agent turn, resident memory and thermals are board questions.
+  [`test/pad-smoke.sh user@pad`](test/pad-smoke.sh) collects all of it in one
+  pass — please report what you get.
 
 ## Sister projects (same board, other CLIs)
 

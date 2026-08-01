@@ -22,11 +22,12 @@ jobs:
           sh -n bin/codex-check-update
           bash -n test/unit.sh
           bash -n test/install-armv7-docker.sh
+          bash -n test/pad-smoke.sh
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -x install.sh bin/codex-check-update lib/codex-release.sh \
-                        test/unit.sh test/install-armv7-docker.sh
+                        test/unit.sh test/install-armv7-docker.sh test/pad-smoke.sh
 
   unit:
     name: unit tests (offline)

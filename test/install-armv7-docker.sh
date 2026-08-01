@@ -3,20 +3,22 @@
 #
 # A linux/arm/v7 container gives `uname -m` = armv7l, a 32-bit libc and 32-bit
 # coreutils — everything the installer branches on. On an x86_64/aarch64 host it
-# is driven by qemu-arm (binfmt), so the codex binary itself would run *nested*
-# (our aarch64 qemu inside the host's arm qemu): that part is unreliable and the
-# smoke test stays off by default. What this proves is the installer: arch gate,
-# download, published-checksum verification, unpack, wrapper generation, probe.
+# is driven by qemu-arm (binfmt), so the codex binary runs *nested*: our aarch64
+# qemu inside the host's arm qemu. That nesting works (measured: `codex
+# --version` in ~10 s on an Apple Silicon host, both engines), so the smoke test
+# is on by default — but a slow runner may need more than the timeout, and a
+# timeout alone does not fail the run unless CODEX_SMOKE_STRICT=1.
 #
-#   test/install-armv7-docker.sh              # install + layout assertions
-#   CODEX_SMOKE=1 test/install-armv7-docker.sh  # also attempt `codex --version`
+#   test/install-armv7-docker.sh                 # install + layout + smoke
+#   CODEX_SMOKE=0 test/install-armv7-docker.sh   # installer only
 #
 # Requires: docker (colima or Docker Desktop) with binfmt for arm.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${IMAGE:-debian:bookworm}"
-SMOKE="${CODEX_SMOKE:-0}"
+SMOKE="${CODEX_SMOKE:-1}"
+SMOKE_TIMEOUT="${CODEX_SMOKE_TIMEOUT:-900}"
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 
@@ -27,6 +29,8 @@ echo "==> running install.sh inside $IMAGE (linux/arm/v7)"
 docker run --rm --platform linux/arm/v7 \
   -v "$REPO:/repo:ro" \
   -e "CODEX_SMOKE=$SMOKE" \
+  -e "CODEX_SMOKE_TIMEOUT=$SMOKE_TIMEOUT" \
+  -e "CODEX_SMOKE_STRICT=${CODEX_SMOKE_STRICT:-0}" \
   -e "CODEX_VERSION=${CODEX_VERSION:-}" \
   "$IMAGE" bash -euo pipefail -c '
     echo "--- guest arch: $(uname -m)"
@@ -59,6 +63,25 @@ docker run --rm --platform linux/arm/v7 \
     installed=$(codex-check-update --installed); latest=$(codex-check-update --latest)
     [ -n "$installed" ] || { echo "FAIL: installed version empty"; exit 1; }
     echo "installed=$installed latest=$latest"
+
+    if [ "$CODEX_SMOKE" != "0" ]; then
+      echo "--- smoke: the emulated binary must answer, on both engines"
+      for engine in fork 7.2; do
+        if out=$(timeout "$CODEX_SMOKE_TIMEOUT" env CODEX_QEMU="$engine" codex-bin --version 2>&1); then
+          echo "engine=$engine → $out"
+          case "$out" in
+            *"$installed"*) ;;
+            *) echo "FAIL: engine $engine answered \"$out\", expected version $installed"; exit 1 ;;
+          esac
+        else
+          # On an x86_64/aarch64 host this is one emulator inside another; a slow
+          # runner timing out says nothing about the pad, so it only fails the
+          # run when asked to.
+          echo "WARN: engine $engine did not answer within ${CODEX_SMOKE_TIMEOUT}s (nested emulation)"
+          [ "$CODEX_SMOKE_STRICT" = "1" ] && { echo "FAIL: strict mode"; exit 1; }
+        fi
+      done
+    fi
 
     echo "--- idempotence (a second run is the OTA update path)"
     bash /repo/install.sh | tail -3

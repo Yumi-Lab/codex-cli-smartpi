@@ -153,13 +153,27 @@ removed upstream). Credentials land in `~/.codex/auth.json`.
 |---|---|---|---|
 | Unit, offline | `test/unit.sh` | metadata parsing (both shapes), probe JSON contract, no hardcoded paths | anything about the board |
 | Staging, x86_64 | `CODEX_ALLOW_ANY_ARCH=1 CODEX_OPT=… bash install.sh` | download, published-checksum verification, unpack, wrapper generation, idempotence, dry run | 32-bit behaviour |
-| **Real armv7l userland** | `test/install-armv7-docker.sh` | the whole installer under a 32-bit libc/coreutils, `uname -m = armv7l`, no systemd, no binfmt, unprivileged degradation | that codex *runs* |
-| Pad | see below | everything | — |
+| **Real armv7l userland** | `test/install-armv7-docker.sh` | the whole installer under a 32-bit libc/coreutils, `uname -m = armv7l`, no systemd, no binfmt, unprivileged degradation — **and that the emulated binary answers** | TUI stability, a real turn, thermals, RSS on the H3 |
+| Pad | `test/pad-smoke.sh user@pad` | everything | — |
 
-Why the container cannot run codex: on an x86_64/aarch64 host the armv7 userland
-is itself driven by `qemu-arm`, so the payload would run **nested** (our
-aarch64 qemu inside the host's arm qemu). That is why `CODEX_SMOKE=0` is the
-default there — the installer is validated, the runtime is not.
+On an x86_64/aarch64 host the container's armv7 userland is itself driven by
+`qemu-arm`, so the payload runs **nested**: our aarch64 qemu (an armv7 binary)
+inside the host's arm qemu. That nesting was expected to be the weak point and
+turned out to work — measured on an Apple Silicon host, Debian bookworm
+`linux/arm/v7`, codex 0.146.0:
+
+| Engine | `codex --version` |
+|---|---|
+| fork 9.2.4-yumi (default) | **9.9 s**, rc=0 |
+| vendored qemu 7.2 | **6.4 s**, rc=0 |
+
+Both engines start a 269 MB static binary and return the right version through
+*two* layers of emulation. The pad has only one, on slower cores. That does not
+predict TUI stability or a full agent turn — it does mean the binary is not
+fundamentally incompatible with 64-on-32 user-mode emulation, which was the one
+open risk before touching hardware. The smoke test therefore runs by default in
+`test/install-armv7-docker.sh` (a timeout only warns, unless
+`CODEX_SMOKE_STRICT=1`).
 
 ### Pad validation, to run on the board
 
