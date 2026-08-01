@@ -33,6 +33,7 @@ printenv OPENAI_API_KEY | codex login --with-api-key    # or use an API key
 |---|---|
 | `codex` | Interactive TUI |
 | `codex exec "task"` | One-shot, non-interactive (scripts, the gateway, cron) |
+| `codex exec --dangerously-bypass-approvals-and-sandbox "task"` | Unattended: no prompt, no sandbox. The only flavour that runs without a human on this board — **do not** use `--full-auto` here, it asks for a sandbox the kernel cannot give (see below). Run it in a directory you control. |
 | `codex --version` | Sanity check |
 | `codex-check-update` | `{"cli":"codex","installed":…,"latest":…,"update_available":…}` |
 | `codex-bin …` | The wrapper without the dispatcher's co-tenancy warning |
@@ -109,7 +110,8 @@ runs all of this on every push:
 
 ```bash
 test/unit.sh                  # offline: metadata parsing, OTA probe, no hardcoded paths
-test/install-armv7-docker.sh  # full install inside a real armv7l userland (docker + binfmt)
+test/install-armv7-docker.sh  # full install + emulated smoke in a real armv7l userland
+test/pad-smoke.sh pi@pad      # on-device: timings per engine, cache sizing, RSS, thermals
 CODEX_ALLOW_ANY_ARCH=1 CODEX_OPT=/tmp/opt CODEX_BINDIR=/tmp/bin CODEX_SMOKE=0 bash install.sh
 CODEX_DRY_RUN=1 bash install.sh   # resolve everything, write nothing
 ```
