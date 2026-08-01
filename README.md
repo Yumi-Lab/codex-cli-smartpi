@@ -124,10 +124,14 @@ and a runner can assert the resulting layout.
 - ✅ Installer validated end-to-end in a **real armv7l userland** (Debian
   bookworm `linux/arm/v7` container): version resolution, published-checksum
   verification, 269 MB unpack, wrapper generation, OTA probe, idempotent re-run.
-- ✅ **The emulated binary runs**: `codex --version` answers under *both* engines
-  from that armv7l userland — ~10 s on the fork, ~6 s on 7.2 — and that is with
-  one more layer of emulation than the pad has (the container's armv7 userland is
-  itself driven by `qemu-arm` on the host).
+- ✅ **The emulated binary runs**, and further than a version string: `--version`
+  answers under *both* engines (~10 s fork, ~6 s 7.2), `--help` renders,
+  `codex login --device-auth` prints its URL and one-time code, and
+  `codex exec` opens a WebSocket to `api.openai.com`, falls back to HTTPS and
+  ends on the expected `401` without credentials — **TLS, DNS and WebSockets all
+  work under emulation**. Resident memory: ~83 MB. And that is with one more
+  layer of emulation than the pad has (the container's armv7 userland is itself
+  driven by `qemu-arm` on the host).
 - ✅ Runs unprivileged into a custom prefix, refuses a 64-bit host by default,
   degrades gracefully with no systemd / no `binfmt_misc` / no `apt`.
 - ⏳ **Not yet run on the pad itself**: TUI stability over a long session, a real

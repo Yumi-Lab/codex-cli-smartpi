@@ -167,13 +167,22 @@ turned out to work — measured on an Apple Silicon host, Debian bookworm
 | fork 9.2.4-yumi (default) | **9.9 s**, rc=0 |
 | vendored qemu 7.2 | **6.4 s**, rc=0 |
 
-Both engines start a 269 MB static binary and return the right version through
-*two* layers of emulation. The pad has only one, on slower cores. That does not
-predict TUI stability or a full agent turn — it does mean the binary is not
-fundamentally incompatible with 64-on-32 user-mode emulation, which was the one
-open risk before touching hardware. The smoke test therefore runs by default in
-`test/install-armv7-docker.sh` (a timeout only warns, unless
-`CODEX_SMOKE_STRICT=1`).
+and, going further than a version string:
+
+| Exercise | Result |
+|---|---|
+| `codex --help` | full clap output, every subcommand listed |
+| `codex exec "say hi"` in a git repo, no credentials | reaches the network: opens `wss://api.openai.com/v1/responses`, falls back to HTTPS, retries 5×, ends on the expected **401 Missing bearer** — so **rustls/aws-lc, DNS, TLS and WebSockets all work under emulation** |
+| `codex login --device-auth` (under a pty) | prints the `auth.openai.com/codex/device` URL **and a one-time code** — the headless sign-in path works |
+| RSS of the emulated process | **~83 MB** during a `--version` run |
+| `CODEX_TB_SIZE` 32 / 128 / 256 | 18.3 s / 27.9 s / 7.9 s — **inconclusive**: nesting adds more noise than the effect. Measure on the pad (`test/pad-smoke.sh`) before changing the 128 MiB default. |
+
+Two layers of emulation where the pad has one, on faster cores. This does not
+predict TUI stability, a full agent turn or thermals — it does mean the binary,
+its TLS stack and its login flow are not fundamentally incompatible with 64-on-32
+user-mode emulation, which was the open risk before touching hardware. The smoke
+test therefore runs by default in `test/install-armv7-docker.sh` (a timeout only
+warns, unless `CODEX_SMOKE_STRICT=1`).
 
 ### Pad validation, to run on the board
 
