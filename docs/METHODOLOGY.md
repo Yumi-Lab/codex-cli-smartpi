@@ -1,0 +1,186 @@
+# Methodology — running the OpenAI Codex CLI on armv7l
+
+Why every choice in [`install.sh`](../install.sh) is what it is, what was
+measured, and what is still open. Written so the next person (or the next model)
+does not have to re-derive it.
+
+## 1. The problem
+
+`curl -fsSL https://chatgpt.com/codex/install.sh | sh` resolves a *vendor target*
+from `uname -s` / `uname -m` and only knows `x86_64` and `aarch64` (plus the
+Apple/Windows ones). On an armv7l board it stops immediately. OpenAI publishes no
+32-bit ARM build — release `rust-v0.146.0` contains 170+ assets, none of them
+`armv7`/`arm-unknown-linux-*`.
+
+The board: Allwinner H3, 4× Cortex-A7 @ 1.2 GHz, 1 GB RAM, Armbian/Debian armhf,
+SD-card storage.
+
+## 2. Why emulation is the pragmatic path
+
+The Linux aarch64 asset is a **statically linked musl Rust binary**:
+
+```
+$ file codex-aarch64-unknown-linux-musl
+ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped   (269 MB)
+```
+
+Static + no dynamic loader + no host libraries is the ideal shape for
+**qemu user-mode**: one process, no sysroot to assemble. This is the same path
+already in production on this hardware for the Grok CLI
+([grok-cli-smartpi](https://github.com/Yumi-Lab/grok-cli-smartpi)), where the
+official binary has the same shape.
+
+The alternative — compiling codex natively for `armv7-unknown-linux-gnueabihf` —
+is genuinely possible (the source is public and Apache-2.0) but is a project of
+its own, with real blockers. It is assessed separately in
+[NATIVE-BUILD.md](NATIVE-BUILD.md).
+
+## 3. Engine: the Yumi qemu fork by default, 7.2 as fallback
+
+- QEMU **≥ 10 removed 64-bit-guest-on-32-bit-host** in linux-user. The last
+  distro build that does it is **7.2** (Debian bookworm), vendored here in
+  [`vendor/`](../vendor/) so no Debian pool URL can rot.
+- 7.2's user mode **tears 64-bit accesses** between threads ("in user mode
+  atomicity was simply broken"). The
+  [Yumi fork of 9.2.4](https://github.com/Yumi-Lab/qemu-64on32-smartpi) routes
+  every 64-bit guest access through a single-copy-atomic emission (inline
+  LDRD/STRD on Cortex-A7 LPAE), backports the `termios2`/`TCGETS2` ioctls and
+  makes the translation cache configurable.
+- codex is a **tokio multithreaded runtime with a ratatui TUI**: shared 64-bit
+  state across threads and termios ioctls are exactly the two things 7.2 gets
+  wrong. On the Grok CLI, the same difference decided whether the native TUI ran
+  at all. Hence: fork by default, `CODEX_QEMU=7.2` to fall back.
+- **Translation cache**: user-mode qemu froze the TB cache at 32 MiB, which turns
+  a large guest into a permanent `tb_flush` storm. The fork exposes
+  `QEMU_TB_SIZE` (MiB); the wrapper sets **128** by default (`CODEX_TB_SIZE` to
+  change). codex is 269 MB of code — this matters more here than for a 120 MB
+  binary.
+
+## 4. Sandboxing is off — and that is not laziness
+
+codex sandboxes the commands it runs. On Linux that means Landlock + a seccomp
+filter, or the bundled `bwrap`. None of it can work here:
+
+- The seccomp filter is built for a fixed target architecture. Upstream
+  ([`linux-sandbox/src/landlock.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/landlock.rs)):
+
+  ```rust
+  if cfg!(target_arch = "x86_64") { TargetArch::x86_64 }
+  else if cfg!(target_arch = "aarch64") { TargetArch::aarch64 }
+  else { unimplemented!("unsupported architecture for seccomp filter") }
+  ```
+
+  The guest binary is aarch64, so it would emit an **aarch64 filter** — while the
+  kernel enforcing it is **armv7**, where the syscall numbers are different. A
+  filter written in the wrong numbering does not fail loudly, it denies (or
+  allows) the wrong calls.
+- `bwrap` and the re-exec'd `codex-linux-sandbox` helper are **aarch64
+  binaries**: without a binfmt handler the kernel answers `ENOEXEC`.
+- A *native* 32-bit build would not help: the same `unimplemented!` is what a
+  `target_arch = "arm"` build hits.
+
+So the installer writes, only when the user has no config yet:
+
+```toml
+sandbox_mode = "danger-full-access"
+approval_policy = "untrusted"
+```
+
+Approvals become the safety net: codex asks before running a command. The
+trade-off is stated in the README rather than hidden — never run this board with
+both the sandbox off *and* approvals off.
+
+`binfmt_misc` registration (root, optional, only if nothing else is registered)
+covers the remaining case: any aarch64 helper codex still re-execs is loaded by
+the kernel through the fork engine instead of failing.
+
+## 5. Sizes, disk and memory
+
+| Item | Size |
+|---|---|
+| `codex-aarch64-unknown-linux-musl.tar.gz` | 105 MB |
+| unpacked binary | 269 MB |
+| qemu fork | 35 MB |
+| qemu 7.2 (vendored) | 7.6 MB |
+
+Consequences baked into the installer:
+
+- **≥ 700 MB free** is checked before anything is written (download + new binary
+  + the previous one during an update). A half-written 269 MB binary on an SD
+  card is a bad failure mode.
+- Downloads go to **`/var/tmp`, never `/tmp`** — `/tmp` is a tmpfs on Armbian and
+  a 105 MB download in RAM on a 1 GB board invites an OOM freeze.
+- The tarball holds a single file, so it is **unpacked straight to its final
+  path** (`tar -xzOf … > …`): staging it elsewhere would cost another 269 MB.
+- `earlyoom` is installed when possible: with SD-card swap, memory exhaustion
+  freezes the machine before the kernel OOM killer reacts.
+- One emulated runtime at a time. The `codex` dispatcher warns when another
+  `qemu-aarch64` is already running (`CODEX_SOLO=0` to mute).
+
+Thermals: on this SoC a sustained 4-core emulated load has reached ~102 °C and
+frozen the board (measured during the Grok work). `CODEX_CPUS=0,1` throttles
+without reinstalling; watch `/sys/class/thermal/thermal_zone0/temp` on long runs.
+
+## 6. Login without a browser
+
+codex supports a device-code flow — the strings in the binary say it plainly:
+*"On a remote or headless machine? Use `codex login --device-auth` instead."*
+That is the documented path here; `printenv OPENAI_API_KEY | codex login
+--with-api-key` is the API-key alternative (the old `--api-key <key>` flag was
+removed upstream). Credentials land in `~/.codex/auth.json`.
+
+## 7. OTA contract (shared by the Yumi-Lab `*-smartpi` repos)
+
+- Re-running `install.sh` **is** the update. It exits fast when already newest.
+- `codex-check-update` prints one JSON line, no sudo, no side effects — the Yumi
+  AI Gateway polls it for the update badge and then re-runs `install.sh`.
+- Version resolution and checksum lookup live in **one** file,
+  [`lib/codex-release.sh`](../lib/codex-release.sh), installed next to the
+  payload and sourced by the probe. Adding a mirror or changing an endpoint is a
+  one-file change.
+- Checksums come from the **published metadata** (`"digest": "sha256:…"`), not
+  from a constant in this repo: nothing to bump when codex releases. Both
+  metadata shapes are handled — releases.openai.com puts the digest right after
+  the asset name, GitHub inserts a whole `uploader` object in between (there is a
+  unit test for each).
+- First install needs root; later updates only need to own `/opt/codex`, so the
+  gateway service user updates without sudo. The `/usr/local/bin` wrappers are
+  version-independent and rewritten only when their content changes.
+
+## 8. Test strategy (what is proven, and by what)
+
+| Layer | Command | Proves | Does not prove |
+|---|---|---|---|
+| Unit, offline | `test/unit.sh` | metadata parsing (both shapes), probe JSON contract, no hardcoded paths | anything about the board |
+| Staging, x86_64 | `CODEX_ALLOW_ANY_ARCH=1 CODEX_OPT=… bash install.sh` | download, published-checksum verification, unpack, wrapper generation, idempotence, dry run | 32-bit behaviour |
+| **Real armv7l userland** | `test/install-armv7-docker.sh` | the whole installer under a 32-bit libc/coreutils, `uname -m = armv7l`, no systemd, no binfmt, unprivileged degradation | that codex *runs* |
+| Pad | see below | everything | — |
+
+Why the container cannot run codex: on an x86_64/aarch64 host the armv7 userland
+is itself driven by `qemu-arm`, so the payload would run **nested** (our
+aarch64 qemu inside the host's arm qemu). That is why `CODEX_SMOKE=0` is the
+default there — the installer is validated, the runtime is not.
+
+### Pad validation, to run on the board
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yumi-Lab/codex-cli-smartpi/main/install.sh | bash
+time codex --version                 # first emulated start translates a lot of code
+codex login --device-auth
+time codex exec "print hello"        # one-shot agent turn
+CODEX_QEMU=7.2 codex --version       # does the fallback engine work at all?
+cat /sys/class/thermal/thermal_zone0/temp   # ÷1000 = °C, watch during a long run
+```
+
+Open questions for that session, in order of interest:
+
+1. Does the **ratatui TUI** render and stay stable under the fork engine (this is
+   where the Grok CLI needed the correct-atomics fork)?
+2. Startup latency and RSS for a 269 MB static binary — is `CODEX_TB_SIZE=128`
+   the right default, or does 256 pay for itself?
+3. Does `codex exec` survive a full agent turn (tool calls spawn native armv7
+   `/bin/bash` children through the emulator's `execve`)?
+4. Thermals on a real agentic run, 4 cores vs `CODEX_CPUS=0,1`.
+
+Record the numbers here when they exist; until then this file says "unmeasured"
+rather than pretending.

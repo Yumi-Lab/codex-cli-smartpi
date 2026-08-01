@@ -1,0 +1,102 @@
+name: CI
+
+# The installer has to behave identically in three places: a GitHub runner
+# (x86_64, no pad), a 32-bit ARM userland (container or VM), and the Smart Pi
+# One itself. Everything below is the first two — the pad is validated by hand,
+# see docs/METHODOLOGY.md.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: shellcheck + syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: |
+          bash -n install.sh
+          sh -n lib/codex-release.sh
+          sh -n bin/codex-check-update
+          bash -n test/unit.sh
+          bash -n test/install-armv7-docker.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -x install.sh bin/codex-check-update lib/codex-release.sh \
+                        test/unit.sh test/install-armv7-docker.sh
+
+  unit:
+    name: unit tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash test/unit.sh
+
+  install-x86:
+    name: install into a temp prefix (x86_64 runner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install (staging mode — no pad, no root, no /opt)
+        env:
+          CODEX_ALLOW_ANY_ARCH: "1"     # a runner is not armv7l
+          CODEX_SMOKE: "0"              # the payload is aarch64: nothing to run here
+        run: |
+          set -euo pipefail
+          export CODEX_OPT="$RUNNER_TEMP/opt/codex" CODEX_BINDIR="$RUNNER_TEMP/bin"
+          mkdir -p "$CODEX_OPT" "$CODEX_BINDIR"
+          bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+
+          echo "--- assertions"
+          grep -q "checksum verified" "$RUNNER_TEMP/install.log"   # published sha256 was used
+          test -x "$CODEX_OPT/codex-aarch64"
+          test -x "$CODEX_OPT/qemu-aarch64-static"
+          test -x "$CODEX_OPT/qemu-aarch64-fork"
+          test -s "$CODEX_OPT/VERSION"
+          test -r "$CODEX_OPT/lib/codex-release.sh"
+          file -b "$CODEX_OPT/codex-aarch64"     | grep -q "ELF 64-bit.*aarch64"
+          file -b "$CODEX_OPT/qemu-aarch64-fork" | grep -q "ELF 32-bit.*ARM"
+          # Wrappers must point at the prefix they were installed for.
+          grep -q "$CODEX_OPT/codex-aarch64" "$CODEX_BINDIR/codex-bin"
+          grep -q "$CODEX_BINDIR/codex-bin"  "$CODEX_BINDIR/codex"
+
+          echo "--- OTA probe"
+          CODEX_OPT="$CODEX_OPT" "$CODEX_BINDIR/codex-check-update" | tee /dev/stderr | grep -q '"cli":"codex"'
+          test "$(CODEX_OPT="$CODEX_OPT" "$CODEX_BINDIR/codex-check-update" --installed)" = "$(cat "$CODEX_OPT/VERSION")"
+
+          echo "--- second run is the OTA update path: fast, no re-download"
+          bash install.sh 2>&1 | tee "$RUNNER_TEMP/install2.log"
+          grep -q "already installed" "$RUNNER_TEMP/install2.log"
+          ! grep -q "Unpacking" "$RUNNER_TEMP/install2.log"
+
+          echo "--- dry run writes nothing"
+          rm -rf "$RUNNER_TEMP/dry"
+          CODEX_DRY_RUN=1 CODEX_OPT="$RUNNER_TEMP/dry" bash install.sh >/dev/null
+          test ! -e "$RUNNER_TEMP/dry"
+
+  install-armv7:
+    name: install in a real armv7l userland (container)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - name: install.sh inside linux/arm/v7
+        run: bash test/install-armv7-docker.sh
+
+  arch-guard:
+    name: refuses a 64-bit host by default
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh must stop on x86_64 without CODEX_ALLOW_ANY_ARCH
+        run: |
+          if bash install.sh >/dev/null 2>err.log; then
+            echo "installer did NOT refuse a non-armv7l host"; exit 1
+          fi
+          grep -q "targets armv7l" err.log

@@ -1,0 +1,46 @@
+#!/bin/sh
+# codex-check-update — one JSON line: installed vs newest OpenAI Codex CLI version.
+#   {"cli":"codex","installed":"0.146.0","latest":"0.147.0","update_available":true}
+#
+# Contract shared by every Yumi-Lab/*-smartpi repo (<cli>-check-update): no sudo,
+# no side effects, fast; "latest"/"installed" are null when unknown (offline, not
+# installed). The Yumi AI Gateway polls this to light its update badge, then
+# re-runs install.sh to actually update — NEVER the upstream installer on armv7l
+# (it rejects the arch), and never `codex update` (it would drop a binary outside
+# the qemu wrapper).
+#
+# Installed version, source of truth: $CODEX_OPT/VERSION (written by install.sh).
+# Newest version: resolved by the shared library installed next to the payload,
+# so the endpoints are defined in exactly one place (lib/codex-release.sh).
+#
+#   --latest    print only the newest published version (used by tooling)
+#   --installed print only the installed version
+
+OPT="${CODEX_OPT:-/opt/codex}"
+LIB="$OPT/lib/codex-release.sh"
+
+installed=""
+[ -r "$OPT/VERSION" ] && installed="$(head -1 "$OPT/VERSION" | tr -d '[:space:]')"
+if [ -z "$installed" ] && command -v codex-bin >/dev/null 2>&1; then
+  # Fallback for a payload installed before VERSION existed: emulated, so seconds.
+  installed="$(timeout 120 codex-bin --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+fi
+
+latest=""
+if [ -r "$LIB" ]; then
+  # shellcheck source=lib/codex-release.sh
+  . "$LIB"
+  latest="$(codex_latest_version)"
+fi
+
+case "${1:-}" in
+  --installed) printf '%s\n' "$installed"; exit 0 ;;
+  --latest)    printf '%s\n' "$latest";    exit 0 ;;
+esac
+
+up=false
+[ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" != "$latest" ] && up=true
+
+j() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
+printf '{"cli":"codex","installed":%s,"latest":%s,"update_available":%s}\n' \
+  "$(j "$installed")" "$(j "$latest")" "$up"

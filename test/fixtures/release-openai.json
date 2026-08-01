@@ -1,0 +1,20 @@
+{
+  "tag_name": "rust-v0.146.0",
+  "assets": [
+    {
+      "name": "bwrap-aarch64-unknown-linux-musl.tar.gz",
+      "digest": "sha256:878377db09e307f884c0c1b3ece9923cd54412c67dd43118fe0a98494b4a6a48",
+      "browser_download_url": "https://releases.openai.com/codex/releases/0.146.0/bwrap-aarch64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "name": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "digest": "sha256:975bac91562abeedeb8f79636d51a86649b31f34a9de6a3bcb059565b6cf1f87",
+      "browser_download_url": "https://releases.openai.com/codex/releases/0.146.0/codex-aarch64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "digest": "sha256:5ba3b9405543953081f661d0854d266f76e2abbe51d41349355a36de7673776a",
+      "browser_download_url": "https://releases.openai.com/codex/releases/0.146.0/codex-x86_64-unknown-linux-musl.tar.gz"
+    }
+  ]
+}

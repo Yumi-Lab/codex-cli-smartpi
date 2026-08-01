@@ -1,0 +1,10 @@
+# Payloads are downloaded at install time, never committed.
+codex-aarch64*
+qemu-aarch64-fork
+*.tar.gz
+*.tar.zst
+
+# Local test leftovers
+/test/tmp/
+*.log
+.DS_Store
