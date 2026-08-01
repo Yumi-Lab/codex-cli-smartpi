@@ -324,11 +324,15 @@ elif [ ! -e "$CFG" ]; then
 sandbox_mode = "danger-full-access"
 approval_policy = "untrusted"
 EOF
+  # Under `sudo bash install.sh` the script is root while the config belongs to
+  # SUDO_USER: create it as root and hand it over, never re-enter sudo.
   if [ "$(id -un)" = "$USER_NAME" ]; then
     mkdir -p "$USER_HOME/.codex" && install -m 644 "$tmpc" "$CFG"
+  elif [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$USER_HOME/.codex" && chown "$USER_NAME" "$USER_HOME/.codex" \
+      && install -o "$USER_NAME" -m 644 "$tmpc" "$CFG"
   else
-    $SUDO -u "$USER_NAME" mkdir -p "$USER_HOME/.codex" \
-      && $SUDO install -o "$USER_NAME" -m 644 "$tmpc" "$CFG"
+    warn "cannot write $CFG for $USER_NAME — create it by hand (see README §4)."
   fi
   rm -f "$tmpc"
 else
@@ -348,25 +352,32 @@ if [ -z "$DRY" ] && [ "$(id -u)" -eq 0 ] && [ -w /proc/sys/fs/binfmt_misc/regist
    && [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] \
    && [ ! -e "/proc/sys/fs/binfmt_misc/$BINFMT_NAME" ] \
    && [ -x "$OPT/qemu-aarch64-fork" ]; then
-  if printf ':%s:M::%s:%s:%s:OC' "$BINFMT_NAME" "$BINFMT_MAGIC" "$BINFMT_MASK" "$OPT/qemu-aarch64-fork" \
-      > /proc/sys/fs/binfmt_misc/register 2>/dev/null; then
+  # The registration line is written to a file once, and both the immediate
+  # registration and the boot unit `cat` it: the \x escapes are parsed by
+  # binfmt_misc itself, so nothing must ever re-interpret them (`printf` in the
+  # unit would depend on whether /bin/sh understands \xNN — dash does not).
+  printf ':%s:M::%s:%s:%s:OC\n' "$BINFMT_NAME" "$BINFMT_MAGIC" "$BINFMT_MASK" "$OPT/qemu-aarch64-fork" \
+    > "$OPT/binfmt.register"
+  if cat "$OPT/binfmt.register" > /proc/sys/fs/binfmt_misc/register 2>/dev/null; then
     log "binfmt_misc: aarch64 binaries now run through the fork engine (undo: echo -1 > /proc/sys/fs/binfmt_misc/$BINFMT_NAME)"
     # binfmt_misc lives in tmpfs — re-register at boot.
     cat > /etc/systemd/system/codex-binfmt.service <<EOF
 [Unit]
 Description=Register the aarch64 binfmt handler for codex (Yumi 64-on-32 qemu fork)
 After=proc-sys-fs-binfmt_misc.mount
-ConditionPathExists=$OPT/qemu-aarch64-fork
+ConditionPathExists=$OPT/binfmt.register
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c "printf ':$BINFMT_NAME:M::$BINFMT_MAGIC:$BINFMT_MASK:$OPT/qemu-aarch64-fork:OC' > /proc/sys/fs/binfmt_misc/register"
+ExecStart=/bin/sh -c 'cat $OPT/binfmt.register > /proc/sys/fs/binfmt_misc/register'
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl enable codex-binfmt.service >/dev/null 2>&1 || true
+  else
+    rm -f "$OPT/binfmt.register"
   fi
 fi
 
