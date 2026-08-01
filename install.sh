@@ -47,6 +47,9 @@
 #   CODEX_ALLOW_ANY_ARCH=1  run on a non-armv7l host (CI / VM staging only)
 #
 # See docs/METHODOLOGY.md for the reasoning behind every choice.
+
+# shellcheck disable=SC2015  # `A && B || C` is deliberate throughout this file:
+# C is a fallback for both, never an if-then-else.
 set -euo pipefail
 
 # ---------------------------------------------------------------- configuration
@@ -269,7 +272,6 @@ if command -v taskset >/dev/null 2>&1; then
 fi
 exec nice -n 5 "\$Q" $OPT/codex-aarch64 "\$@"
 EOF
-# shellcheck disable=SC2015  # deliberate: warn when a wrapper already exists, fail when none does
 put_if_changed "$BINDIR/codex-bin" "$w" 755 \
   || { [ -x "$BINDIR/codex-bin" ] && warn "cannot rewrite $BINDIR/codex-bin — existing wrapper kept." \
        || fail "cannot install $BINDIR/codex-bin (run once as root/sudo first)."; }
@@ -288,7 +290,6 @@ if [ "\${CODEX_SOLO:-1}" != "0" ] && command -v pgrep >/dev/null 2>&1; then
 fi
 exec $BINDIR/codex-bin "\$@"
 EOF
-# shellcheck disable=SC2015  # deliberate: warn when a dispatcher already exists, fail when none does
 put_if_changed "$BINDIR/codex" "$w" 755 \
   || { [ -x "$BINDIR/codex" ] && warn "cannot rewrite $BINDIR/codex — existing dispatcher kept." \
        || fail "cannot install $BINDIR/codex (run once as root/sudo first)."; }
