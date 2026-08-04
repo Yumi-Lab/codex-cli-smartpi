@@ -97,6 +97,22 @@ aarch64 one that needs an emulator. Note it is **dynamically linked** (glibc,
 libssl, libz from the board) where the official binary is static musl — the
 install path checks it runs before trusting it.
 
+## Releases: tags versus snapshots
+
+| Built from | Release tag | Prerelease | Picked up by `install.sh` on its own |
+|---|---|---|---|
+| `rust-vX.Y.Z` (a codex release) | `vX.Y.Z` | no | **yes** — `CODEX_ENGINE=auto` asks for exactly this |
+| a branch (`CODEX_REF=main`) | `snapshot-main-<sha>` | yes | no — install it with `CODEX_NATIVE_TARBALL=<url>` |
+
+The distinction is not bureaucracy: a build from `main` is a different codebase
+from the release it is ahead of, and publishing it under that version's tag would
+hand every board a binary that claims to be something it is not. Snapshots also
+report `0.0.0`, because upstream stamps crate versions only when it tags.
+
+Measured end to end on the pad, installing a published snapshot straight from
+GitHub: **1 min 6 s** for 89 MB downloaded, checksum verified, unpacked and
+wrappers written; `codex --version` answers in 0.11 s afterwards.
+
 ## What this means in practice
 
 - **codex 0.146.0 cannot be built natively for armv7** — V8 is in the CLI graph.

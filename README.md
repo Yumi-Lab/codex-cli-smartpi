@@ -144,6 +144,20 @@ version it resolved. If it does, it installs it and **downloads no emulator at
 all**; `CODEX_KEEP_EMULATION=1` installs both so the two can be compared on one
 board. `codex-check-update` reports which one is in use.
 
+Until upstream ships a version that can be built (see below), the newest native
+binary is published as a **snapshot prerelease** of a branch build. Install it
+explicitly — one minute end to end on the board, no emulator downloaded:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yumi-Lab/codex-cli-smartpi/main/install.sh | \
+  CODEX_NATIVE_TARBALL=<url of the snapshot .tar.gz> bash
+```
+
+The URL is on the [releases page](https://github.com/Yumi-Lab/codex-cli-smartpi/releases);
+the checksum next to it is verified during the install. A snapshot reports
+`0.0.0` — upstream stamps versions only when it tags — and `install.sh` never
+picks one up on its own.
+
 The native track is built by [`build/cross-armv7.sh`](build/cross-armv7.sh) in CI
 and a daily cron watches upstream, so a new codex release becomes an armv7 asset
 without anyone bumping a version anywhere. Whether a given codex version *can* be
