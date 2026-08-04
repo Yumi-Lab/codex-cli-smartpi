@@ -187,10 +187,13 @@ fi
 if ( cd "$SRC/codex-rs" && cargo tree --target "$TARGET" -p codex-cli -i v8 >/dev/null 2>&1 ); then
   if [ -z "${CODEX_ALLOW_V8:-}" ]; then
     ( cd "$SRC/codex-rs" && cargo tree --target "$TARGET" -p codex-cli -i v8 2>/dev/null | head -6 ) || true
-    fail "codex at $REF links V8 into the CLI, and there is no armv7 build of V8.
+    warn "codex at $REF links V8 into the CLI, and there is no armv7 build of V8.
        Build a commit where code-mode no longer depends on the v8 crate
        (CODEX_REF=main), or wait for the next upstream release.
        See docs/NATIVE-BUILD.md; CODEX_ALLOW_V8=1 to try anyway."
+    # 78 = "this version cannot be built here", distinct from a broken build.
+    # The daily watcher turns it into a skip instead of a red run.
+    exit 78
   fi
   warn "V8 is in the CLI graph and CODEX_ALLOW_V8 is set — expect a 404 on the V8 prebuilt"
 fi

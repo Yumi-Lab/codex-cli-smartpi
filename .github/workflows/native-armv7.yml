@@ -75,12 +75,26 @@ jobs:
           restore-keys: |
             armv7-
 
+      # Exit 78 means "this codex version cannot be built for armv7" (V8 in the
+      # CLI graph). That is a fact about upstream, not a broken pipeline, so the
+      # job records it and stops instead of going red every day.
       - name: Cross-compile
+        id: build
         env:
           CODEX_REF: ${{ inputs.ref }}
-        run: bash build/cross-armv7.sh "${{ steps.ver.outputs.version }}" "$GITHUB_WORKSPACE/dist"
+        run: |
+          set +e
+          bash build/cross-armv7.sh "${{ steps.ver.outputs.version }}" "$GITHUB_WORKSPACE/dist"
+          rc=$?
+          if [ "$rc" -eq 78 ]; then
+            echo "skipped=v8" >> "$GITHUB_OUTPUT"
+            echo "::notice::codex ${{ steps.ver.outputs.version }} links V8 into the CLI — no native armv7 build is possible for this version (see docs/NATIVE-BUILD.md)"
+            exit 0
+          fi
+          exit "$rc"
 
       - name: Inspect the artifact
+        if: steps.build.outputs.skipped != 'v8'
         run: |
           set -euo pipefail
           ls -lh dist/
@@ -91,6 +105,7 @@ jobs:
           file -b /tmp/codex | grep -q "ELF 32-bit.*ARM" || { echo "not a 32-bit ARM binary"; exit 1; }
 
       - uses: actions/upload-artifact@v4
+        if: steps.build.outputs.skipped != 'v8'
         with:
           name: codex-armv7-${{ steps.ver.outputs.version }}
           path: dist/*
@@ -100,6 +115,7 @@ jobs:
       # is dynamically linked against the armhf multiarch libraries, so the
       # sysroot is the container root, not the cross toolchain's own prefix.
       - name: Smoke test (qemu-arm)
+        if: steps.build.outputs.skipped != 'v8'
         run: |
           set -uo pipefail
           apt-get install -y -qq --no-install-recommends qemu-user-static >/dev/null
@@ -123,12 +139,13 @@ jobs:
 
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      skipped: ${{ steps.build.outputs.skipped }}
 
   # Publishing runs on the host (the rust image has no gh CLI) and only ever
   # touches artifacts the build job produced.
   publish:
     needs: build
-    if: ${{ inputs.publish }}
+    if: ${{ inputs.publish && needs.build.outputs.skipped != 'v8' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
