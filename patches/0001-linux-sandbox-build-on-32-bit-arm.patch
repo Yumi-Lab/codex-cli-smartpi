@@ -1,0 +1,51 @@
+--- a/codex-rs/linux-sandbox/src/landlock.rs
++++ b/codex-rs/linux-sandbox/src/landlock.rs
+@@ -169,8 +169,10 @@
+ fn install_network_seccomp_filter_on_current_thread(
+     mode: NetworkSeccompMode,
+ ) -> std::result::Result<(), SandboxErr> {
+-    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: i64) {
+-        rules.insert(nr, vec![]); // empty rule vec = unconditional match
++    // Yumi-Lab/codex-cli-smartpi: `libc::SYS_*` is i64 on 64-bit targets and i32
++    // on 32-bit ARM, so the syscall number is taken as anything convertible.
++    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: impl Into<i64>) {
++        rules.insert(nr.into(), vec![]); // empty rule vec = unconditional match
+     }
+ 
+     // Build rule map.
+@@ -212,8 +214,8 @@
+                 libc::AF_UNIX as u64,
+             )?])?;
+ 
+-            rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+-            rules.insert(libc::SYS_socketpair, vec![unix_only_rule]);
++            rules.insert(i64::from(libc::SYS_socket), vec![unix_only_rule.clone()]);
++            rules.insert(i64::from(libc::SYS_socketpair), vec![unix_only_rule]);
+         }
+         NetworkSeccompMode::ProxyRouted => {
+             // In proxy-routed mode we allow IP sockets in the isolated
+@@ -242,8 +244,8 @@
+                 SeccompCmpOp::Ne,
+                 libc::AF_UNIX as u64,
+             )?])?;
+-            rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+-            rules.insert(libc::SYS_socketpair, vec![deny_non_unix_socketpair]);
++            rules.insert(i64::from(libc::SYS_socket), vec![deny_non_ip_socket]);
++            rules.insert(i64::from(libc::SYS_socketpair), vec![deny_non_unix_socketpair]);
+         }
+     }
+ 
+@@ -256,7 +258,12 @@
+         } else if cfg!(target_arch = "aarch64") {
+             TargetArch::aarch64
+         } else {
+-            unimplemented!("unsupported architecture for seccomp filter");
++            // Yumi-Lab/codex-cli-smartpi: seccompiler has no 32-bit ARM target,
++            // and a filter written in another architecture's syscall numbering
++            // would deny the wrong calls. Refuse instead of panicking — the
++            // caller then reports that the sandbox could not be enforced, which
++            // is exactly what happened.
++            return Err(SandboxErr::LandlockRestrict);
+         },
+     )?;
+ 
