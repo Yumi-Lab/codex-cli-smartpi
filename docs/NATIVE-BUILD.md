@@ -79,6 +79,24 @@ rather than dying twenty minutes later on what reads like a network error:
               (CODEX_REF=main), or wait for the next upstream release.
 ```
 
+## It builds
+
+Validated in CI on 2026-08-04 against upstream `main` (`CODEX_REF=main`), after
+the patches above:
+
+```
+Finished `release` profile [optimized + debuginfo] target(s) in 46m 53s
+codex: ELF 32-bit LSB pie executable, ARM, EABI5, dynamically linked,
+       interpreter /lib/ld-linux-armhf.so.3, stripped
+dist/codex-<version>-armv7-unknown-linux-gnueabihf.tar.gz   85 MB
+```
+
+So the recipe is complete: ~1000 crates cross-compiled for armv7, ~47 minutes on
+a GitHub runner (cached afterwards), and an 85 MB tarball against the 105 MB
+aarch64 one that needs an emulator. Note it is **dynamically linked** (glibc,
+libssl, libz from the board) where the official binary is static musl — the
+install path checks it runs before trusting it.
+
 ## What this means in practice
 
 - **codex 0.146.0 cannot be built natively for armv7** — V8 is in the CLI graph.

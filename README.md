@@ -149,8 +149,10 @@ is in [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md).
 - ✅ Installer validated in CI on every push: unit tests, a staged install on an
   x86_64 runner, and a full install **plus emulated smoke test** inside a real
   armv7l userland.
-- ✅ Native armv7 cross-build pipeline in place (toolchain, armhf multiarch, the
-  `pagable` 32-bit patch, release + daily watcher).
+- ✅ **The native armv7 build works**: validated against upstream `main`,
+  ~47 minutes on a runner, 85 MB tarball, `ELF 32-bit LSB pie executable, ARM`.
+  Pipeline in place end to end (toolchain, armhf multiarch, the `pagable` and
+  `linux-sandbox` 32-bit patches, release publishing, daily watcher).
 - ⏳ codex **0.146.0 cannot be built natively** — it links V8 into the CLI and
   there is no armv7 V8. Upstream already moved v8 out of `code-mode` on `main`,
   so the first release carrying that change will be built and published
