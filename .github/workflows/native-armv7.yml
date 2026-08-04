@@ -36,6 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     container: rust:bookworm
+    # Inside a container the default shell is dash, which has no `set -o pipefail`.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
