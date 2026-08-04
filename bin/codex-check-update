@@ -1,6 +1,6 @@
 #!/bin/sh
 # codex-check-update — one JSON line: installed vs newest OpenAI Codex CLI version.
-#   {"cli":"codex","installed":"0.146.0","latest":"0.147.0","update_available":true}
+#   {"cli":"codex","installed":"0.146.0","engine":"native","latest":"0.147.0","update_available":true}
 #
 # Contract shared by every Yumi-Lab/*-smartpi repo (<cli>-check-update): no sudo,
 # no side effects, fast; "latest"/"installed" are null when unknown (offline, not
@@ -15,12 +15,22 @@
 #
 #   --latest    print only the newest published version (used by tooling)
 #   --installed print only the installed version
+#   --engine    print only the engine in use (native | emulated)
 
 OPT="${CODEX_OPT:-/opt/codex}"
 LIB="$OPT/lib/codex-release.sh"
 
 installed=""
 [ -r "$OPT/VERSION" ] && installed="$(head -1 "$OPT/VERSION" | tr -d '[:space:]')"
+# Which payload is installed: the native armv7 build, or the emulated aarch64
+# one. Written by install.sh; inferred from the files for older installs.
+engine=""
+[ -r "$OPT/ENGINE" ] && engine="$(head -1 "$OPT/ENGINE" | tr -d '[:space:]')"
+if [ -z "$engine" ]; then
+  if   [ -x "$OPT/codex-armv7" ];   then engine="native"
+  elif [ -x "$OPT/codex-aarch64" ]; then engine="emulated"
+  fi
+fi
 if [ -z "$installed" ] && command -v codex-bin >/dev/null 2>&1; then
   # Fallback for a payload installed before VERSION existed: emulated, so seconds.
   installed="$(timeout 120 codex-bin --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
@@ -36,11 +46,12 @@ fi
 case "${1:-}" in
   --installed) printf '%s\n' "$installed"; exit 0 ;;
   --latest)    printf '%s\n' "$latest";    exit 0 ;;
+  --engine)    printf '%s\n' "$engine";    exit 0 ;;
 esac
 
 up=false
 [ -n "$installed" ] && [ -n "$latest" ] && [ "$installed" != "$latest" ] && up=true
 
 j() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
-printf '{"cli":"codex","installed":%s,"latest":%s,"update_available":%s}\n' \
-  "$(j "$installed")" "$(j "$latest")" "$up"
+printf '{"cli":"codex","installed":%s,"engine":%s,"latest":%s,"update_available":%s}\n' \
+  "$(j "$installed")" "$(j "$engine")" "$(j "$latest")" "$up"

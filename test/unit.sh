@@ -50,19 +50,28 @@ printf '0.146.0\n' > "$tmp/VERSION"
 cat > "$tmp/lib/codex-release.sh" <<'STUB'
 codex_latest_version() { printf '0.147.0'; }
 STUB
+printf 'native\n' > "$tmp/ENGINE"
 out="$(CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update")"
-is "JSON line" '{"cli":"codex","installed":"0.146.0","latest":"0.147.0","update_available":true}' "$out"
+is "JSON line" '{"cli":"codex","installed":"0.146.0","engine":"native","latest":"0.147.0","update_available":true}' "$out"
+is "--engine" "native" "$(CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update" --engine)"
 is "--installed" "0.146.0" "$(CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update" --installed)"
 is "--latest"    "0.147.0" "$(CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update" --latest)"
 printf '0.147.0\n' > "$tmp/VERSION"
 is "up to date → update_available false" \
-   '{"cli":"codex","installed":"0.147.0","latest":"0.147.0","update_available":false}' \
+   '{"cli":"codex","installed":"0.147.0","engine":"native","latest":"0.147.0","update_available":false}' \
    "$(CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update")"
 rm -f "$tmp/VERSION"
-is "nothing installed → null" \
-   '{"cli":"codex","installed":null,"latest":"0.147.0","update_available":false}' \
+rm -f "$tmp/ENGINE"
+is "nothing installed → nulls" \
+   '{"cli":"codex","installed":null,"engine":null,"latest":"0.147.0","update_available":false}' \
    "$(PATH=/usr/bin:/bin CODEX_OPT="$tmp" sh "$REPO/bin/codex-check-update")"
 rm -rf "$tmp"
+
+echo "native track (the armv7 binaries this repo builds)"
+is "asset name" "codex-1.2.3-armv7-unknown-linux-gnueabihf.tar.gz" "$(codex_native_asset 1.2.3)"
+is "download URL" \
+   "https://github.com/Yumi-Lab/codex-cli-smartpi/releases/download/v1.2.3/codex-1.2.3-armv7-unknown-linux-gnueabihf.tar.gz" \
+   "$(codex_native_url 1.2.3)"
 
 echo "no hardcoded install paths (a prefix change must not need a second edit)"
 stray="$(grep -n '/opt/codex' "$REPO/install.sh" | grep -v '^\s*[0-9]*:\s*#' | grep -v 'CODEX_OPT:-/opt/codex' | grep -vc '^$' || true)"
