@@ -42,17 +42,25 @@ Environment knobs (no reinstall needed):
 
 | Variable | Effect |
 |---|---|
-| `CODEX_CPUS=0,1` | Thermal throttle — default is all 4 cores |
-| `CODEX_QEMU=7.2` | Fall back to the vendored qemu 7.2 engine |
+| `CODEX_ENGINE=native\|emulated\|auto` | Which payload to install (default `auto`), and at run time which one to use when both are present |
+| `CODEX_CPUS=0,1` | Thermal throttle — default is all 4 cores, both engines |
+| `CODEX_QEMU=7.2` | Fall back to the vendored qemu 7.2 engine (emulated only) |
 | `CODEX_TB_SIZE=256` | Translation-cache size in MiB (default 128, fork engine only) |
 | `CODEX_SOLO=0` | Silence the "another emulated runtime is running" warning |
 | `CODEX_VERSION` / `CODEX_FORCE` | Pin a version / reinstall even when up to date |
+| `CODEX_KEEP_EMULATION=1` | Install the emulated payload next to the native one (install time) |
+| `CODEX_NATIVE_TARBALL=<path\|url>` | Install a native build you produced yourself with `build/cross-armv7.sh` |
 
 ⚠️ **Never run** `codex update` or the upstream installer on this board — both
 would drop an aarch64 binary outside the qemu wrapper. Re-run `install.sh`.
 
 ## How it works
 
+0. **Native first.** When a release of this repo carries an armv7 build for the
+   resolved version, that binary is installed and nothing below applies — no
+   emulator is even downloaded. Everything from here on describes the emulated
+   fallback, which is what runs when upstream's version cannot be built for
+   armv7 (see [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md)).
 1. The official codex binary is **static Rust (musl, aarch64)** — 269 MB, no
    dynamic linking, exactly the shape that emulates well in user mode.
 2. QEMU removed "64-bit guest on a 32-bit host" in version 10, so two engines
@@ -99,9 +107,13 @@ Native (emulation-free) armv7 build assessment: [docs/NATIVE-BUILD.md](docs/NATI
 
 ## Requirements
 
-armv7l board, Debian/Armbian bookworm or newer, ≥ 1 GB RAM, **≥ 700 MB free
-disk** (269 MB binary + 105 MB download + the previous version during an update),
-`curl` and `tar`. The installer checks the free space before touching anything.
+armv7l board, Debian/Armbian bookworm or newer, ≥ 1 GB RAM, `curl` and `tar`.
+Disk: **≥ 700 MB free** for the emulated payload (269 MB binary + 105 MB download
++ the previous version during an update), **≈ 300 MB** for the native one
+(211 MB binary, no emulator). The installer checks free space before touching
+anything. The native build is dynamically linked and needs `libssl.so.3`,
+`libcrypto.so.3`, `libz` and `libgcc_s` from the distribution — present by
+default on Debian bookworm/trixie and DietPi.
 
 ## Development / CI
 
