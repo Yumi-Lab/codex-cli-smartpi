@@ -184,26 +184,40 @@ user-mode emulation, which was the open risk before touching hardware. The smoke
 test therefore runs by default in `test/install-armv7-docker.sh` (a timeout only
 warns, unless `CODEX_SMOKE_STRICT=1`).
 
-### Pad validation, to run on the board
+### Measured on the pad (Smart Pi One, DietPi / Debian 13 trixie, 2026-08-04)
+
+Allwinner H3, 4× Cortex-A7, 991 MB RAM, SD card, codex 0.146.0 emulated:
+
+| Exercise | Result |
+|---|---|
+| `install.sh` end to end (as root) | complete: qemu fork + 269 MB payload + wrappers + config, `binfmt_misc` registered, `earlyoom` active |
+| `codex --version`, fork engine (default) | **2.33 s** |
+| `codex --version`, qemu 7.2 | **1.99 s** |
+| `CODEX_TB_SIZE` 32 / 128 / 256 | 2.29 / 2.29 / 2.29 s — no measurable effect on a short run; the 128 MiB default stands until a long agentic session says otherwise |
+| `codex --help` | renders fully |
+| `codex exec "say hi"`, no credentials | opens `wss://api.openai.com/v1/responses`, falls back to HTTPS, retries, ends on the expected **401 Missing bearer** — TLS, DNS and WebSockets all work through the emulator |
+| `codex-check-update` | `{"cli":"codex","installed":"0.146.0","engine":"emulated","latest":"0.146.0","update_available":false}` |
+| Disk footprint | `/opt/codex` = **297 MB** |
+| Temperature | 39 °C idle, **44 °C** after the run sequence (throttling starts at 75 °C) |
+| Memory | 146 MB used of 991 during the session |
+
+Still to do by hand, in an interactive session on the board:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Yumi-Lab/codex-cli-smartpi/main/install.sh | bash
-time codex --version                 # first emulated start translates a lot of code
-codex login --device-auth
-time codex exec "print hello"        # one-shot agent turn
-CODEX_QEMU=7.2 codex --version       # does the fallback engine work at all?
-cat /sys/class/thermal/thermal_zone0/temp   # ÷1000 = °C, watch during a long run
+codex login --device-auth     # headless sign-in (validated in a container: prints URL + code)
+codex                         # the TUI: does it render, does it stay stable over a long session?
+codex exec "…"                # a real authenticated turn, watching the temperature
 ```
 
-Open questions for that session, in order of interest:
+`test/pad-smoke.sh user@pad` runs the measured part again in one pass; add a
+`-J jumphost` in `~/.ssh/config` when the board is behind a VPN.
 
-1. Does the **ratatui TUI** render and stay stable under the fork engine (this is
+### Open questions for the next session on the board
+
+1. Does the **ratatui TUI** render and stay stable over a long session (this is
    where the Grok CLI needed the correct-atomics fork)?
-2. Startup latency and RSS for a 269 MB static binary — is `CODEX_TB_SIZE=128`
-   the right default, or does 256 pay for itself?
-3. Does `codex exec` survive a full agent turn (tool calls spawn native armv7
-   `/bin/bash` children through the emulator's `execve`)?
-4. Thermals on a real agentic run, 4 cores vs `CODEX_CPUS=0,1`.
-
-Record the numbers here when they exist; until then this file says "unmeasured"
-rather than pretending.
+2. Does a full authenticated `codex exec` turn survive — tool calls spawn native
+   armv7 `/bin/bash` children through the emulator's `execve`?
+3. Thermals on a sustained agentic run, 4 cores vs `CODEX_CPUS=0,1`.
+4. Does `CODEX_TB_SIZE=256` pay for itself on a long session, where it did
+   nothing on a short one?

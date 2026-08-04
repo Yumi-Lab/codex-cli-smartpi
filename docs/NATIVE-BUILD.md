@@ -1,88 +1,120 @@
-# Can codex be built natively for armv7l? (and is there JS/Python inside?)
+# The native armv7 track — building codex from source for the pad
 
-Assessment done on **codex 0.146.0** (`rust-v0.146.0`), source read from
-[openai/codex](https://github.com/openai/codex) at that tag. Conclusion first:
+OpenAI ships codex for x86_64 and aarch64 only. This repo therefore builds the
+Apache-2.0 source itself for `armv7-unknown-linux-gnueabihf` and publishes the
+binary as a release, so the pad can run a **native** CLI with no emulator in the
+picture. [`build/cross-armv7.sh`](../build/cross-armv7.sh) is the whole recipe;
+[`.github/workflows/native-armv7.yml`](../.github/workflows/native-armv7.yml)
+runs it and publishes, and
+[`watch-upstream.yml`](../.github/workflows/watch-upstream.yml) checks once a day
+whether upstream shipped a version we have not built yet.
 
-> **The source is fully public (Apache-2.0) — nothing needs decompiling.** There
-> is no embedded JavaScript or Python interpreter in the `codex` binary to
-> extract. A native `armv7-unknown-linux-gnueabihf` build is *plausible* but not
-> free: three real blockers, listed below. Emulation ships today; a native build
-> is a follow-up project.
+Reproduce it anywhere with Docker — the CI job runs this exact command:
 
-## 1. What the binary actually is
+```bash
+docker run --rm -v "$PWD:/repo" -w /repo rust:bookworm bash build/cross-armv7.sh
+```
 
-`codex-aarch64-unknown-linux-musl` is a 269 MB **statically linked Rust binary**,
-stripped. Not Bun, not Node, not PyInstaller — so the extraction trick used for
-[Claude Code](https://github.com/Yumi-Lab/claude-code-smartpi) (recovering the JS
-bundle from a Bun-compiled binary) has no equivalent here, and no need for one:
+## What the source actually is
 
-- Rust workspace of ~150 crates under `codex-rs/`, toolchain pinned to **1.95.0**
-  (`codex-rs/rust-toolchain.toml`), Cargo + Bazel build files, Apache-2.0.
-- The only embedded web-ish assets are static HTML/CSS strings:
-  `login/src/assets/{success,error}.html` (the page shown after a browser login)
-  and `tui/src/inline_visualization/assets/{visualize.html,visualize.css}`. Those
-  are the `--primary-foreground` / `--radius-lg` CSS variables one finds with
-  `strings` — a stylesheet, not an application.
-- **V8 is in the workspace but not in this binary.** `v8 150.4.0` is a dependency
-  of `code-mode-runtime`, used only by the separate `codex-code-mode-host`
-  executable (the upstream installer wires it on macOS only). The `codex` binary
-  (`codex-rs/cli`) does not pull it in — which is precisely what makes a 32-bit
-  build conceivable at all, since `rusty_v8` publishes no armv7 prebuilt.
+Full Rust workspace, ~150 crates, toolchain pinned to 1.95.0
+(`codex-rs/rust-toolchain.toml`), Apache-2.0. **Nothing to decompile and no
+embedded interpreter**: the only web-ish assets are static HTML/CSS strings
+(`login/src/assets/*.html`, `tui/src/inline_visualization/assets/*`) — those are
+the `--primary-foreground` / `--radius-lg` CSS variables one finds with
+`strings`, a stylesheet, not an application.
 
-## 2. Blockers for `armv7-unknown-linux-gnueabihf`
+## The blockers, in the order the build hits them
 
-**(a) rustls uses the `aws_lc_rs` provider.** The workspace pins
-`rustls = { default-features = false, features = ["aws_lc_rs", "std"] }` (and
-`rcgen` likewise), so `aws-lc-sys` 0.39 must compile for 32-bit ARM — a C/CMake
-build with hand-written assembly whose armv7 support is best-effort. This is the
-most likely thing to fail first. `ring` 0.17 is already in the lockfile (pulled
-by other crates) and does support armv7, so switching the provider is the
-obvious escape hatch — it is a workspace-level patch, not a fork of the code.
+Every one of these was found by running the build, not by reading tea leaves.
 
-**(b) the sandbox does not exist on 32-bit ARM.** `linux-sandbox/src/landlock.rs`
-selects the seccomp target architecture with a `cfg!` chain that ends in
+**1. `rustup target add` on the wrong toolchain.** codex pins its own toolchain
+in the source tree, so adding the target from our checkout installs std for the
+runner's default toolchain and the first crate dies with *"can't find crate for
+`core`"*. The target is added from inside the source tree.
+
+**2. `openssl-sys` and `libz-sys` need real armhf libraries.** Not vendored in
+this dependency graph, so the build runs in **Debian** (armhf lives in the same
+mirror): `dpkg --add-architecture armhf` plus `libssl-dev:armhf`,
+`zlib1g-dev:armhf`, and `PKG_CONFIG_LIBDIR` pointed at the armhf `.pc` files so
+`-sys` crates do not link the amd64 ones. `aws-lc-sys`, the one everybody expects
+to be the problem, cross-compiles fine with cmake + a C++ cross compiler +
+libclang.
+
+**3. `pagable 0.4.1` refuses to compile on 32-bit ARM.** Pulled in by `starlark`
+(the exec-policy engine). It carries
+
+```rust
+#[cfg(target_pointer_width = "32")]
+static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 12]);
+```
+
+calibrated on wasm32; on armv7 the same struct packs into 10 usizes and the
+build stops. It is a size canary, not a layout invariant — nothing computes
+offsets from it — so [`patches/crates/pagable-0.4.1.patch`](../patches/crates/pagable-0.4.1.patch)
+keeps the assertion on wasm32 and drops it elsewhere. Patches are applied to the
+**extracted registry source**, never through `[patch.crates-io]`: a patch entry
+makes cargo re-resolve the whole graph, and a re-resolved graph is not the one
+upstream tested (see below).
+
+**4. The workspace patches a dependency over `ssh://git@github.com`.** Without an
+SSH key cargo cannot resolve it and re-resolves everything; the build script
+rewrites ssh→https so the lockfile resolves as written.
+
+**5. V8 — the one that decides everything.** At **rust-v0.146.0**,
+`code-mode/Cargo.toml` has `v8 = { workspace = true }`, and `code-mode` is in the
+CLI's dependency graph (`codex-cli → codex-exec → codex-app-server →
+codex-code-mode`). The `v8` crate's build script downloads a prebuilt V8 and
+there is **no armv7 flavour** — it 404s. Building V8 for 32-bit ARM from source
+is not a realistic option.
+
+Upstream has since moved `v8` out of `code-mode` into `code-mode-runtime`, which
+the CLI does not use — so newer commits build. The script checks this in seconds
+with `cargo tree -p codex-cli -i v8` and refuses early with an explanation
+rather than dying twenty minutes later on what reads like a network error:
+
+```
+[cross-armv7] codex at rust-v0.146.0 links V8 into the CLI, and there is no armv7 build of V8.
+              Build a commit where code-mode no longer depends on the v8 crate
+              (CODEX_REF=main), or wait for the next upstream release.
+```
+
+## What this means in practice
+
+- **codex 0.146.0 cannot be built natively for armv7** — V8 is in the CLI graph.
+  The pad runs the emulated aarch64 binary, which is what `install.sh` installs
+  today, and it works (see the measured numbers in
+  [METHODOLOGY.md](METHODOLOGY.md)).
+- **The moment upstream ships a release without V8 in the CLI graph**, the daily
+  watcher builds it, publishes an armv7 asset, and `install.sh` starts installing
+  the native binary on its own — `CODEX_ENGINE=auto` asks the release, no manual
+  step, nothing to bump.
+- Everything else on the way there is already solved and committed: toolchain,
+  multiarch, the `pagable` patch, the ssh rewrite, the release/publish pipeline.
+
+## Two things still worth knowing about a native build
+
+**The sandbox will not exist there either.** `linux-sandbox/src/landlock.rs`
+selects the seccomp target architecture with a `cfg!` chain ending in
 `unimplemented!("unsupported architecture for seccomp filter")` for anything that
-is not x86_64 or aarch64. A native armv7 build must therefore run with
-`sandbox_mode = "danger-full-access"` too — exactly like the emulated one — or
-carry a patch adding `TargetArch::arm`. **This is the same conclusion the
-emulated setup reaches, for a different reason.**
+is not x86_64 or aarch64. Native or emulated, this board runs with
+`sandbox_mode = "danger-full-access"` and approvals as the safety net.
 
-**(c) `arg0` multi-call dispatch is known-broken on ARM.** Upstream's own test
-suite says so:
+**`arg0` multi-call dispatch is known-broken on arm.** Upstream's own test suite
+says so:
 
 ```rust
 // Skipped on arm because the ctor logic to handle arg0 doesn't work on ARM
 #[cfg(not(target_arch = "arm"))]
-async fn unified_exec_formats_large_output_summary() -> Result<()> {
 ```
 
-`codex-arg0` is the busybox-style dispatcher that lets the binary re-exec itself
-as `codex-linux-sandbox` / `apply_patch`. Encouraging (someone upstream *does*
-compile for arm32) and limiting (that path needs verification, or the features
-that rely on it need to be disabled).
+`codex-arg0` is what lets the binary re-exec itself as `codex-linux-sandbox` or
+`apply_patch`. Encouraging (someone upstream does compile for arm32) and
+limiting: that path needs verification on the first native binary that boots.
 
-Not blockers, worth noting: 64-bit atomics are fine on armv7 (LDREXD/STREXD),
-`zstd-sys`/`openssl-sys` build for armhf routinely, and `usize` being 32-bit is a
-risk only in code that assumes 64-bit — the workspace has ~100 `AtomicU64` /
-`u64 as usize` sites that a first build would flag.
+## When comparing the two engines
 
-## 3. If someone takes it on
-
-Never on the pad (1 GB of RAM will not link this). Cross-compile in Docker on the
-Mac, the way `qemu-64on32-smartpi` already does for qemu:
-
-```bash
-rustup target add armv7-unknown-linux-gnueabihf
-# in a debian:bookworm container with gcc-arm-linux-gnueabihf + cmake + clang
-cargo build --release --target armv7-unknown-linux-gnueabihf -p codex-cli
-```
-
-Expected order of events: `aws-lc-sys` fails → patch the workspace onto the
-`ring` provider → the build gets far → drop/stub the linux-sandbox crate → a
-binary that must run with sandboxing off. Compare it against the emulated setup
-on the *same* pad before switching anything: an emulated aarch64 build with good
-codegen is not automatically slower than a native armv7 build of a program that
-was never tuned for in-order Cortex-A7.
-
-Until that comparison exists, this repo ships emulation — it works, it is one
-`curl | bash`, and it tracks upstream releases the day they ship.
+Do it on the same pad, same version, same workload. An emulated aarch64 build
+with good codegen is not automatically slower than a native armv7 build of a
+program that was never tuned for an in-order Cortex-A7 — `CODEX_KEEP_EMULATION=1`
+installs both so the comparison is one environment variable away.

@@ -119,25 +119,44 @@ CODEX_DRY_RUN=1 bash install.sh   # resolve everything, write nothing
 `CODEX_OPT` / `CODEX_BINDIR` relocate the whole install, so nothing needs root
 and a runner can assert the resulting layout.
 
+## Two engines: native or emulated
+
+| | native | emulated |
+|---|---|---|
+| What runs | the armv7 binary **this repo builds** from the Apache-2.0 source | the official aarch64 musl binary under 64-on-32 qemu |
+| Availability | when a release of this repo carries an armv7 asset for that version | always, the day upstream ships |
+| Chosen by | `CODEX_ENGINE=auto` (default) — native if published, else emulated | `CODEX_ENGINE=emulated` forces it |
+
+`install.sh` asks the releases of this repo whether a native build exists for the
+version it resolved. If it does, it installs it and **downloads no emulator at
+all**; `CODEX_KEEP_EMULATION=1` installs both so the two can be compared on one
+board. `codex-check-update` reports which one is in use.
+
+The native track is built by [`build/cross-armv7.sh`](build/cross-armv7.sh) in CI
+and a daily cron watches upstream, so a new codex release becomes an armv7 asset
+without anyone bumping a version anywhere. Whether a given codex version *can* be
+built for armv7 depends on one thing — whether the CLI links V8 — and that story
+is in [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md).
+
 ## Status
 
-- ✅ Installer validated end-to-end in a **real armv7l userland** (Debian
-  bookworm `linux/arm/v7` container): version resolution, published-checksum
-  verification, 269 MB unpack, wrapper generation, OTA probe, idempotent re-run.
-- ✅ **The emulated binary runs**, and further than a version string: `--version`
-  answers under *both* engines (~10 s fork, ~6 s 7.2), `--help` renders,
-  `codex login --device-auth` prints its URL and one-time code, and
-  `codex exec` opens a WebSocket to `api.openai.com`, falls back to HTTPS and
-  ends on the expected `401` without credentials — **TLS, DNS and WebSockets all
-  work under emulation**. Resident memory: ~83 MB. And that is with one more
-  layer of emulation than the pad has (the container's armv7 userland is itself
-  driven by `qemu-arm` on the host).
-- ✅ Runs unprivileged into a custom prefix, refuses a 64-bit host by default,
-  degrades gracefully with no systemd / no `binfmt_misc` / no `apt`.
-- ⏳ **Not yet run on the pad itself**: TUI stability over a long session, a real
-  agent turn, resident memory and thermals are board questions.
-  [`test/pad-smoke.sh user@pad`](test/pad-smoke.sh) collects all of it in one
-  pass — please report what you get.
+- ✅ **Validated on the real board** (Smart Pi One, DietPi/trixie, 2026-08-04):
+  `install.sh` end to end as root, `codex --version` in **2.3 s** on the fork
+  engine (2.0 s on qemu 7.2), `--help` rendering, `codex exec` reaching
+  `api.openai.com` over TLS + WebSockets and ending on the expected 401 without
+  credentials, `codex-check-update` answering, 297 MB on the SD card, 44 °C.
+  Numbers in [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+- ✅ Installer validated in CI on every push: unit tests, a staged install on an
+  x86_64 runner, and a full install **plus emulated smoke test** inside a real
+  armv7l userland.
+- ✅ Native armv7 cross-build pipeline in place (toolchain, armhf multiarch, the
+  `pagable` 32-bit patch, release + daily watcher).
+- ⏳ codex **0.146.0 cannot be built natively** — it links V8 into the CLI and
+  there is no armv7 V8. Upstream already moved v8 out of `code-mode` on `main`,
+  so the first release carrying that change will be built and published
+  automatically, and `install.sh` will switch to it on its own.
+- ⏳ Not yet exercised on the board: the TUI over a long session, an
+  authenticated agent turn, thermals under sustained load.
 
 ## Sister projects (same board, other CLIs)
 
