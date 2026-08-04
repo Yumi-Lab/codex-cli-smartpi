@@ -147,24 +147,38 @@ export CARGO_TERM_COLOR=never
 
 # `cargo fetch` populates the registry; crates are only unpacked when something
 # needs them, so a first (expected to fail) build is the fallback that forces it.
-# Not --locked: at rust-v0.146.0 the committed lockfile is already out of sync
-# with the git dependencies (rules_rust, nucleo), so cargo has to touch it no
-# matter what we do. What matters is that WE no longer edit any manifest — the
-# crate patches are applied to the extracted sources — so cargo only changes
-# what upstream's own manifests force, and the crates.io graph stays put.
-log "fetching the dependency graph"
-( cd "$SRC/codex-rs" && cargo fetch --target "$TARGET" )
+# codex's workspace patches one dependency through an ssh:// URL. Without an SSH
+# key cargo cannot resolve it, re-resolves the graph instead, and that graph is
+# NOT the one upstream tested — it pulled in a v8 dependency whose build script
+# downloads a V8 prebuilt that has no armv7 flavour. Rewriting ssh→https lets
+# cargo resolve exactly what the lockfile says, so --locked can hold.
+git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+log "fetching the dependency graph (locked)"
+if ! ( cd "$SRC/codex-rs" && cargo fetch --locked --target "$TARGET" ); then
+  warn "the pinned lockfile needs an update — resolving without --locked"
+  LOCKED=""
+  ( cd "$SRC/codex-rs" && cargo fetch --target "$TARGET" )
+  # Leave a trace of what the re-resolution dragged in: this is where a v8
+  # dependency would appear, and it is the reason a build suddenly needs a
+  # prebuilt that does not exist for this architecture.
+  if grep -q '^name = "v8"' "$SRC/codex-rs/Cargo.lock"; then
+    warn "v8 is in the resolved graph — dependency drift, see docs/NATIVE-BUILD.md"
+    ( cd "$SRC/codex-rs" && cargo tree --target "$TARGET" -p codex-cli -i v8 2>&1 | head -20 ) || true
+  fi
+else
+  LOCKED="--locked"
+fi
 if ! apply_crate_patches; then
   log "sources not unpacked yet — priming the build to extract them"
-  ( cd "$SRC/codex-rs" && cargo build --release --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
+  ( cd "$SRC/codex-rs" && cargo build --release $LOCKED --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
   apply_crate_patches || fail "a crate to patch was never extracted — check patches/crates/"
 fi
 
-log "cargo build --release -p codex-cli --bin codex"
-( cd "$SRC/codex-rs" && cargo build --release --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
-# The v8 crate has no armv7 prebuilt and must never enter the graph: if it ever
-# does, the build has drifted away from upstream's resolution.
-! grep -q '^name = "v8"' "$SRC/codex-rs/Cargo.lock" || log "note: v8 is present in the lockfile (not built for codex-cli)"
+log "cargo build --release $LOCKED -p codex-cli --bin codex"
+# shellcheck disable=SC2086  # $LOCKED is either empty or exactly --locked
+( cd "$SRC/codex-rs" && cargo build --release $LOCKED --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
 
 BIN="$SRC/codex-rs/target/$TARGET/release/codex"
 [ -x "$BIN" ] || fail "the build produced no binary"
