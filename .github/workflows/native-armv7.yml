@@ -19,6 +19,9 @@ on:
         description: "publish a GitHub Release"
         type: boolean
         default: true
+      ref:
+        description: "upstream git ref to build (default: the rust-vX.Y.Z tag)"
+        required: false
   workflow_call:
     inputs:
       version:
@@ -27,6 +30,9 @@ on:
       publish:
         type: boolean
         default: true
+      ref:
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -69,6 +75,8 @@ jobs:
             armv7-
 
       - name: Cross-compile
+        env:
+          CODEX_REF: ${{ inputs.ref }}
         run: bash build/cross-armv7.sh "${{ steps.ver.outputs.version }}" "$GITHUB_WORKSPACE/dist"
 
       - name: Inspect the artifact

@@ -18,6 +18,10 @@ TARGET=armv7-unknown-linux-gnueabihf
 VER="${1:-}"
 OUT="${2:-$HERE/dist}"
 SRC="${CODEX_SRC:-/tmp/codex-src}"
+# Which upstream commit to build. Defaults to the release tag; CODEX_REF=main
+# (or any branch/sha) builds ahead of a release — useful because whether the CLI
+# links V8 depends on the commit, see the guard further down.
+REF="${CODEX_REF:-}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 log()  { printf '\033[1;36m[cross-armv7]\033[0m %s\n' "$*"; }
@@ -60,18 +64,19 @@ command -v cargo >/dev/null || fail "missing cargo (use the rust:latest image, o
 
 # --- source ----------------------------------------------------------------
 # Shallow, sparse: the Rust workspace only. The tag scheme is upstream's.
+[ -n "$REF" ] || REF="rust-v$VER"
 if [ ! -d "$SRC/.git" ]; then
-  log "cloning openai/codex at rust-v$VER"
+  log "cloning openai/codex at $REF"
   git clone --depth 1 --filter=blob:none --no-checkout \
-    --branch "rust-v$VER" https://github.com/openai/codex.git "$SRC"
+    --branch "$REF" https://github.com/openai/codex.git "$SRC"
   git -C "$SRC" sparse-checkout init --cone
   git -C "$SRC" sparse-checkout set codex-rs
   git -C "$SRC" checkout
 else
-  log "reusing $SRC (fetching rust-v$VER)"
-  git -C "$SRC" fetch --depth 1 origin "rust-v$VER"
+  log "reusing $SRC (fetching $REF)"
+  git -C "$SRC" fetch --depth 1 origin "$REF"
   git -C "$SRC" checkout -q -f FETCH_HEAD
-  git -C "$SRC" reset -q --hard FETCH_HEAD   # drop a previous run's [patch] section
+  git -C "$SRC" reset -q --hard FETCH_HEAD
 fi
 
 # --- patches ---------------------------------------------------------------
@@ -171,6 +176,25 @@ if ! ( cd "$SRC/codex-rs" && cargo fetch --locked --target "$TARGET" ); then
 else
   LOCKED="--locked"
 fi
+# --- the V8 gate -----------------------------------------------------------
+# Whether a native armv7 build is possible at all comes down to one question:
+# does the CLI link V8? At rust-v0.146.0 `code-mode` depends on the v8 crate
+# directly, so it does — and rusty_v8 publishes no armv7 prebuilt (its build
+# script downloads one and gets a 404). Upstream has since moved v8 out of
+# code-mode and into code-mode-runtime, which the CLI does not use, so newer
+# commits build. Failing here costs seconds; failing during the compile costs
+# twenty minutes and reads like a network error.
+if ( cd "$SRC/codex-rs" && cargo tree --target "$TARGET" -p codex-cli -i v8 >/dev/null 2>&1 ); then
+  if [ -z "${CODEX_ALLOW_V8:-}" ]; then
+    ( cd "$SRC/codex-rs" && cargo tree --target "$TARGET" -p codex-cli -i v8 2>/dev/null | head -6 ) || true
+    fail "codex at $REF links V8 into the CLI, and there is no armv7 build of V8.
+       Build a commit where code-mode no longer depends on the v8 crate
+       (CODEX_REF=main), or wait for the next upstream release.
+       See docs/NATIVE-BUILD.md; CODEX_ALLOW_V8=1 to try anyway."
+  fi
+  warn "V8 is in the CLI graph and CODEX_ALLOW_V8 is set — expect a 404 on the V8 prebuilt"
+fi
+
 if ! apply_crate_patches; then
   log "sources not unpacked yet — priming the build to extract them"
   ( cd "$SRC/codex-rs" && cargo build --release $LOCKED --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
