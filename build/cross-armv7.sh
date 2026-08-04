@@ -20,7 +20,8 @@ OUT="${2:-$HERE/dist}"
 SRC="${CODEX_SRC:-/tmp/codex-src}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
-log() { printf '\033[1;36m[cross-armv7]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;36m[cross-armv7]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[cross-armv7]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[cross-armv7]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # Version resolution reuses the one place that knows the release endpoints.
