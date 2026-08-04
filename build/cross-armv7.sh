@@ -95,7 +95,7 @@ PATCHED="${CODEX_PATCHED_CRATES:-/tmp/codex-patched-crates}"
 if compgen -G "$HERE/patches/crates/*.patch" >/dev/null; then
   mkdir -p "$PATCHED"
   section="$(mktemp)"
-  printf '\n[patch.crates-io]\n' > "$section"
+  printf '# codex-cli-smartpi: 32-bit fixes\n' > "$section"
   for p in "$HERE"/patches/crates/*.patch; do
     nv="$(basename "$p" .patch)"          # e.g. pagable-0.4.1
     name="${nv%-*}"; ver="${nv##*-}"
@@ -112,10 +112,25 @@ if compgen -G "$HERE/patches/crates/*.patch" >/dev/null; then
     fi
     printf '%s = { path = "%s" }\n' "$name" "$PATCHED/$nv" >> "$section"
   done
-  # Appended to the workspace manifest, once (the source tree is re-cloned or
-  # reset for every build, so this cannot accumulate).
-  grep -q '^\[patch.crates-io\]' "$SRC/codex-rs/Cargo.toml" || cat "$section" >> "$SRC/codex-rs/Cargo.toml"
+  # codex already ships a [patch.crates-io] section (its own forks of crossterm
+  # and tungstenite), so our entries are INSERTED into it — appending a second
+  # section header would be invalid TOML, and skipping the append silently left
+  # the registry copy in place, which is exactly the bug this comment exists for.
+  manifest="$SRC/codex-rs/Cargo.toml"
+  if grep -q '^\[patch\.crates-io\]' "$manifest"; then
+    sed -i "0,/^\[patch\.crates-io\]/{/^\[patch\.crates-io\]/r $section
+}" "$manifest"
+  else
+    { printf '\n[patch.crates-io]\n'; cat "$section"; } >> "$manifest"
+  fi
   rm -f "$section"
+  # Wiring that does not take effect is invisible until the build fails deep in
+  # the compile, so it is checked right here.
+  for p in "$HERE"/patches/crates/*.patch; do
+    nv="$(basename "$p" .patch)"
+    grep -q "$PATCHED/$nv" "$manifest" || fail "could not wire the patched $nv into [patch.crates-io]"
+  done
+  log "patched crates wired: $(grep -c "$PATCHED/" "$manifest")"
 fi
 
 # --- toolchain, take two ---------------------------------------------------
