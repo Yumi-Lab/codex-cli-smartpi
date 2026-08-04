@@ -93,6 +93,13 @@ jobs:
           fi
           exit "$rc"
 
+      # Which upstream commit was actually compiled — a release must never claim
+      # to be version X when it was built from a branch that is ahead of X.
+      - name: Record the upstream commit
+        id: src
+        if: steps.build.outputs.skipped != 'v8'
+        run: echo "sha=$(git -C /tmp/codex-src rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Inspect the artifact
         if: steps.build.outputs.skipped != 'v8'
         run: |
@@ -140,6 +147,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       skipped: ${{ steps.build.outputs.skipped }}
+      sha: ${{ steps.src.outputs.sha }}
 
   # Publishing runs on the host (the rust image has no gh CLI) and only ever
   # touches artifacts the build job produced.
@@ -156,15 +164,49 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.build.outputs.version }}
+          SHA: ${{ needs.build.outputs.sha }}
+          REF: ${{ inputs.ref }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="v$V"
-          notes="Native **armv7-unknown-linux-gnueabihf** build of the official [codex $V](https://github.com/openai/codex/releases/tag/rust-v$V) source (Apache-2.0), cross-compiled by [build/cross-armv7.sh](https://github.com/$REPO/blob/main/build/cross-armv7.sh).
+          if [ -z "$REF" ]; then
+            # Built from the release tag: this IS codex $V for armv7, and
+            # install.sh picks it up on its own (it looks for v<version>).
+            tag="v$V"
+            title="codex $V — armv7 native"
+            flags=""
+            notes="Native **armv7-unknown-linux-gnueabihf** build of the official [codex $V](https://github.com/openai/codex/releases/tag/rust-v$V) source (Apache-2.0), cross-compiled by [build/cross-armv7.sh](https://github.com/$REPO/blob/main/build/cross-armv7.sh).
 
           Installed automatically by \`install.sh\` on an armv7l board — no emulation, no qemu. Checksum in the \`.sha256\` file."
+          else
+            # Built from a branch: it is NOT a released version, so it gets its
+            # own tag and never answers the \"is there a native build of X?\"
+            # question install.sh asks. The binary reports 0.0.0 because upstream
+            # only stamps versions when it tags.
+            tag="snapshot-$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')-$SHA"
+            title="codex snapshot $REF@$SHA — armv7 native"
+            flags="--prerelease"
+            for f in dist/codex-"$V"-armv7-*; do
+              [ -e "$f" ] || continue
+              mv "$f" "$(printf '%s' "$f" | sed "s/codex-$V-/codex-$REF-$SHA-/")"
+            done
+            ( cd dist && rm -f ./*.sha256 && sha256sum ./*.tar.gz > "$(ls ./*.tar.gz | sed 's|^\./||').sha256" )
+            notes="Native **armv7-unknown-linux-gnueabihf** build of openai/codex at \`$REF\` (\`$SHA\`), cross-compiled by [build/cross-armv7.sh](https://github.com/$REPO/blob/main/build/cross-armv7.sh).
+
+          **This is a snapshot of a branch, not a release.** The binary reports \`0.0.0\` — upstream stamps versions only when it tags — and \`install.sh\` will not pick it up on its own. Install it explicitly:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | \\
+            CODEX_NATIVE_TARBALL=https://github.com/$REPO/releases/download/$tag/\$(ls dist/*.tar.gz | xargs -n1 basename) bash
+          \`\`\`
+
+          It exists because the newest tagged codex links V8 into the CLI, which has no armv7 build — see [docs/NATIVE-BUILD.md](https://github.com/$REPO/blob/main/docs/NATIVE-BUILD.md)."
+          fi
+
+          ls -l dist/
           if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber --repo "$REPO"
           else
-            gh release create "$tag" dist/* --title "codex $V — armv7 native" --notes "$notes" --repo "$REPO"
+            # shellcheck disable=SC2086
+            gh release create "$tag" dist/* --title "$title" --notes "$notes" $flags --repo "$REPO"
           fi
