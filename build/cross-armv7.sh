@@ -87,51 +87,38 @@ fi
 # --- third-party crates that assume 64 bits --------------------------------
 # Some dependencies fail to COMPILE on 32-bit ARM for reasons that have nothing
 # to do with codex (see patches/crates/*.patch for the case-by-case reasoning).
-# Each patch is named <crate>-<version>.patch; the crate is downloaded from
-# crates.io, patched, and wired in with [patch.crates-io] so cargo uses our copy
-# instead of the registry one. Nothing is forked and nothing is vendored: if the
-# version moves, the build fails loudly instead of silently patching nothing.
-PATCHED="${CODEX_PATCHED_CRATES:-/tmp/codex-patched-crates}"
-if compgen -G "$HERE/patches/crates/*.patch" >/dev/null; then
-  mkdir -p "$PATCHED"
-  section="$(mktemp)"
-  printf '# codex-cli-smartpi: 32-bit fixes\n' > "$section"
+#
+# They are patched IN THE EXTRACTED REGISTRY SOURCE, not through
+# [patch.crates-io]: a patch entry forces cargo to re-resolve the whole graph,
+# and a re-resolved graph is not the one upstream tested — the first attempt
+# dragged in a v8 dependency that the pinned lockfile does not contain, and the
+# build died trying to download a V8 prebuilt that has no armv7 flavour.
+# Patching the extracted source keeps `--locked` valid and the graph identical.
+apply_crate_patches() {
+  compgen -G "$HERE/patches/crates/*.patch" >/dev/null || return 0
+  local src_root="${CARGO_HOME:-$HOME/.cargo}/registry/src"
   for p in "$HERE"/patches/crates/*.patch; do
+    local nv name ver dir
     nv="$(basename "$p" .patch)"          # e.g. pagable-0.4.1
     name="${nv%-*}"; ver="${nv##*-}"
     # The dependency graph must actually contain that exact version, otherwise
-    # the patch is stale and would be silently ignored.
+    # the patch is stale and would silently do nothing.
     grep -q "^name = \"$name\"" "$SRC/codex-rs/Cargo.lock" \
       || fail "patches/crates/$nv.patch: $name is no longer a dependency of codex $VER"
     grep -A1 "^name = \"$name\"" "$SRC/codex-rs/Cargo.lock" | grep -q "^version = \"$ver\"" \
       || fail "patches/crates/$nv.patch: codex $VER uses a different version of $name — rebase the patch"
-    if [ ! -d "$PATCHED/$nv" ]; then
-      log "patching $nv"
-      curl -fsSL "https://static.crates.io/crates/$name/$nv.crate" | tar -xz -C "$PATCHED"
-      ( cd "$PATCHED/$nv" && patch -p1 --silent < "$p" ) || fail "patches/crates/$nv.patch does not apply"
+
+    dir="$(find "$src_root" -maxdepth 2 -type d -name "$nv" 2>/dev/null | head -1)"
+    [ -n "$dir" ] || return 1          # not extracted yet — caller retries later
+    if [ -e "$dir/.yumi-patched" ]; then
+      log "$nv already patched"
+    else
+      ( cd "$dir" && patch -p1 --silent < "$p" ) || fail "patches/crates/$nv.patch does not apply to $nv"
+      touch "$dir/.yumi-patched"
+      log "patched $nv in the registry source"
     fi
-    printf '%s = { path = "%s" }\n' "$name" "$PATCHED/$nv" >> "$section"
   done
-  # codex already ships a [patch.crates-io] section (its own forks of crossterm
-  # and tungstenite), so our entries are INSERTED into it — appending a second
-  # section header would be invalid TOML, and skipping the append silently left
-  # the registry copy in place, which is exactly the bug this comment exists for.
-  manifest="$SRC/codex-rs/Cargo.toml"
-  if grep -q '^\[patch\.crates-io\]' "$manifest"; then
-    sed -i "0,/^\[patch\.crates-io\]/{/^\[patch\.crates-io\]/r $section
-}" "$manifest"
-  else
-    { printf '\n[patch.crates-io]\n'; cat "$section"; } >> "$manifest"
-  fi
-  rm -f "$section"
-  # Wiring that does not take effect is invisible until the build fails deep in
-  # the compile, so it is checked right here.
-  for p in "$HERE"/patches/crates/*.patch; do
-    nv="$(basename "$p" .patch)"
-    grep -q "$PATCHED/$nv" "$manifest" || fail "could not wire the patched $nv into [patch.crates-io]"
-  done
-  log "patched crates wired: $(grep -c "$PATCHED/" "$manifest")"
-fi
+}
 
 # --- toolchain, take two ---------------------------------------------------
 # Inside the source tree rust-toolchain.toml decides which rustc runs; `rustup
@@ -158,8 +145,18 @@ export OPENSSL_NO_VENDOR=1
 export BINDGEN_EXTRA_CLANG_ARGS_armv7_unknown_linux_gnueabihf="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/include/arm-linux-gnueabihf"
 export CARGO_TERM_COLOR=never
 
-log "cargo build --release -p codex-cli --bin codex"
-( cd "$SRC/codex-rs" && cargo build --release --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
+# `cargo fetch` populates the registry; crates are only unpacked when something
+# needs them, so a first (expected to fail) build is the fallback that forces it.
+log "fetching the dependency graph (locked)"
+( cd "$SRC/codex-rs" && cargo fetch --locked --target "$TARGET" )
+if ! apply_crate_patches; then
+  log "sources not unpacked yet — priming the build to extract them"
+  ( cd "$SRC/codex-rs" && cargo build --release --locked --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
+  apply_crate_patches || fail "a crate to patch was never extracted — check patches/crates/"
+fi
+
+log "cargo build --release --locked -p codex-cli --bin codex"
+( cd "$SRC/codex-rs" && cargo build --release --locked --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
 
 BIN="$SRC/codex-rs/target/$TARGET/release/codex"
 [ -x "$BIN" ] || fail "the build produced no binary"
