@@ -147,16 +147,24 @@ export CARGO_TERM_COLOR=never
 
 # `cargo fetch` populates the registry; crates are only unpacked when something
 # needs them, so a first (expected to fail) build is the fallback that forces it.
-log "fetching the dependency graph (locked)"
-( cd "$SRC/codex-rs" && cargo fetch --locked --target "$TARGET" )
+# Not --locked: at rust-v0.146.0 the committed lockfile is already out of sync
+# with the git dependencies (rules_rust, nucleo), so cargo has to touch it no
+# matter what we do. What matters is that WE no longer edit any manifest — the
+# crate patches are applied to the extracted sources — so cargo only changes
+# what upstream's own manifests force, and the crates.io graph stays put.
+log "fetching the dependency graph"
+( cd "$SRC/codex-rs" && cargo fetch --target "$TARGET" )
 if ! apply_crate_patches; then
   log "sources not unpacked yet — priming the build to extract them"
-  ( cd "$SRC/codex-rs" && cargo build --release --locked --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
+  ( cd "$SRC/codex-rs" && cargo build --release --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex ) || true
   apply_crate_patches || fail "a crate to patch was never extracted — check patches/crates/"
 fi
 
-log "cargo build --release --locked -p codex-cli --bin codex"
-( cd "$SRC/codex-rs" && cargo build --release --locked --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
+log "cargo build --release -p codex-cli --bin codex"
+( cd "$SRC/codex-rs" && cargo build --release --target "$TARGET" -j "$JOBS" -p codex-cli --bin codex )
+# The v8 crate has no armv7 prebuilt and must never enter the graph: if it ever
+# does, the build has drifted away from upstream's resolution.
+! grep -q '^name = "v8"' "$SRC/codex-rs/Cargo.lock" || log "note: v8 is present in the lockfile (not built for codex-cli)"
 
 BIN="$SRC/codex-rs/target/$TARGET/release/codex"
 [ -x "$BIN" ] || fail "the build produced no binary"
