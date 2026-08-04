@@ -44,7 +44,7 @@ if [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null; then
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
     gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
-    pkg-config pkg-config-arm-linux-gnueabihf \
+    pkg-config \
     cmake clang libclang-dev perl git ca-certificates file \
     libssl-dev:armhf zlib1g-dev:armhf >/dev/null
 fi
@@ -97,10 +97,12 @@ export AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
 # The Smart Pi One is a Cortex-A7: NEON + hard float are guaranteed.
 export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard"
 export CXXFLAGS_armv7_unknown_linux_gnueabihf="$CFLAGS_armv7_unknown_linux_gnueabihf"
-# -sys crates must ask the armhf pkg-config, not the host one, or they find the
-# amd64 libraries and link garbage.
-command -v arm-linux-gnueabihf-pkg-config >/dev/null && export PKG_CONFIG=arm-linux-gnueabihf-pkg-config
+# -sys crates must resolve the armhf .pc files, not the host ones, or they find
+# the amd64 libraries and link garbage. bookworm has no per-triplet pkg-config
+# wrapper package, so the search path is set directly.
 export PKG_CONFIG_ALLOW_CROSS=1
+export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/
 export OPENSSL_NO_VENDOR=1
 # bindgen (aws-lc-sys) needs the cross headers explicitly.
 export BINDGEN_EXTRA_CLANG_ARGS_armv7_unknown_linux_gnueabihf="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/include/arm-linux-gnueabihf"
