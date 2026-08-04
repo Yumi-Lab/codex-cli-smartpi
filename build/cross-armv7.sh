@@ -43,7 +43,11 @@ fi
 command -v arm-linux-gnueabihf-gcc >/dev/null \
   || fail "missing arm-linux-gnueabihf-gcc — apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross cmake clang"
 command -v cargo >/dev/null || fail "missing cargo (use the rust:latest image, or install rustup)"
-rustup target add "$TARGET"
+# NOTE: the target is added AFTER the source is fetched — codex pins its own
+# toolchain in rust-toolchain.toml, and `rustup target add` only serves the
+# toolchain active in the current directory. Doing it here would install std for
+# the runner's default toolchain and the build would then fail with
+# "can't find crate for `core`".
 
 # --- source ----------------------------------------------------------------
 # Shallow, sparse: the Rust workspace only. The tag scheme is upstream's.
@@ -70,6 +74,12 @@ if compgen -G "$HERE/patches/*.patch" >/dev/null; then
     git -C "$SRC" apply --verbose "$p" || fail "patch $(basename "$p") no longer applies to rust-v$VER"
   done
 fi
+
+# --- toolchain, take two ---------------------------------------------------
+# Inside the source tree rust-toolchain.toml decides which rustc runs; `rustup
+# show` installs it if needed, then the target lands on that exact toolchain.
+log "pinned toolchain: $(cd "$SRC/codex-rs" && rustup show active-toolchain 2>/dev/null || echo unknown)"
+( cd "$SRC/codex-rs" && rustup target add "$TARGET" )
 
 # --- build -----------------------------------------------------------------
 export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc

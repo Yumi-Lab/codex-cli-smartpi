@@ -46,14 +46,16 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building codex $v"
 
-      - name: Rust toolchain + cross tools
+      # The Rust target is NOT added here: codex pins its toolchain in
+      # rust-toolchain.toml, so build/cross-armv7.sh adds it from inside the
+      # source tree, on the toolchain that will actually compile.
+      - name: Cross tools
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
             cmake clang perl pkg-config
-          rustup target add armv7-unknown-linux-gnueabihf
 
       # The workspace is ~150 crates; without a cache every run pays the full
       # compile. Keyed on the codex version so a new release starts clean-ish

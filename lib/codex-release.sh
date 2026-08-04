@@ -74,3 +74,23 @@ codex_asset_urls() {
   printf 'https://github.com/%s/releases/download/%s%s/%s\n' \
     "$CODEX_GITHUB_REPO" "$CODEX_TAG_PREFIX" "$1" "$CODEX_ASSET"
 }
+
+# --- native armv7 track ----------------------------------------------------
+# OpenAI publishes no 32-bit ARM build, so this repo cross-compiles the
+# Apache-2.0 source itself (build/cross-armv7.sh, run by the native-armv7
+# workflow) and publishes one release per upstream version. When that asset
+# exists the pad runs a NATIVE binary and no emulator at all.
+CODEX_SMARTPI_REPO="Yumi-Lab/codex-cli-smartpi"
+CODEX_NATIVE_TARGET="armv7-unknown-linux-gnueabihf"
+
+codex_native_asset() { printf 'codex-%s-%s.tar.gz' "$1" "$CODEX_NATIVE_TARGET"; }
+
+codex_native_url() {
+  printf 'https://github.com/%s/releases/download/v%s/%s\n' \
+    "$CODEX_SMARTPI_REPO" "$1" "$(codex_native_asset "$1")"
+}
+
+# 0 when a native build exists for that version (a HEAD request, no download).
+codex_native_available() {
+  curl -fsIL --max-time "$CODEX_CURL_TIMEOUT" -o /dev/null "$(codex_native_url "$1")" 2>/dev/null
+}

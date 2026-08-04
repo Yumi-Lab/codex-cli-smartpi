@@ -156,8 +156,44 @@ if [ -n "${free_mb:-}" ] && [ "$free_mb" -lt "$NEED_FREE_MB" ]; then
   fail "only ${free_mb} MB free on $(df -Pm "$OPT" | awk 'NR==2 {print $6}') — codex needs about ${NEED_FREE_MB} MB (269 MB binary + download + previous version)."
 fi
 
-# ---------------------------------------------------------------- 1. engines
-# 1a. QEMU 7.2, vendored in the repo: NO dependency on Debian mirrors (the exact
+# ------------------------------------------------------ 1. version and engine
+# Two ways to run codex on this board:
+#   native    — the armv7 binary this project cross-compiles from the Apache-2.0
+#               source and publishes per upstream version. No emulator at all.
+#   emulated  — the official aarch64 musl binary under 64-on-32 qemu. Always
+#               available, works the day upstream ships, costs the emulation.
+# auto (default) takes native when a build exists for the resolved version.
+if [ -n "${CODEX_VERSION:-}" ]; then
+  VER="$CODEX_VERSION"
+else
+  VER="$(codex_latest_version || true)"
+  [ -n "$VER" ] || { VER="$PINNED_VER"; warn "release metadata unreachable — using pinned version $VER"; }
+fi
+case "$VER" in ''|*[!0-9.]*) fail "invalid codex version: '$VER'" ;; esac
+
+ENGINE="${CODEX_ENGINE:-auto}"
+case "$ENGINE" in
+  native|emulated) ;;
+  auto)
+    if codex_native_available "$VER"; then ENGINE=native; else ENGINE=emulated; fi
+    ;;
+  *) fail "CODEX_ENGINE must be auto, native or emulated (got '$ENGINE')" ;;
+esac
+if [ "$ENGINE" = native ] && ! codex_native_available "$VER"; then
+  fail "no native armv7 build published for codex $VER — $(codex_native_url "$VER") is missing. Use CODEX_ENGINE=emulated, or wait for the build workflow."
+fi
+log "Target: codex $VER, engine: $ENGINE"
+
+# The emulator is fetched only when it is going to be used. CODEX_KEEP_EMULATION=1
+# installs it next to a native payload, so `CODEX_ENGINE=emulated codex …` still
+# works offline (useful to compare the two on the same board).
+WANT_EMU=0
+[ "$ENGINE" = emulated ] && WANT_EMU=1
+[ -n "${CODEX_KEEP_EMULATION:-}" ] && WANT_EMU=1
+
+# ---------------------------------------------------------------- 2. engines
+if [ "$WANT_EMU" = 1 ]; then
+# 2a. QEMU 7.2, vendored in the repo: NO dependency on Debian mirrors (the exact
 #     .deb disappears from the pool at every point release).
 if [ ! -x "$OPT/qemu-aarch64-static" ]; then
   log "Installing qemu-aarch64-static 7.2 (64-on-32 fallback engine)…"
@@ -195,61 +231,75 @@ if [ "$cur_fork" != "$QEMU_FORK_TAG" ] || [ ! -x "$OPT/qemu-aarch64-fork" ] || [
   fi
 fi
 
-# ---------------------------------------------------------------- 2. codex
-if [ -n "${CODEX_VERSION:-}" ]; then
-  VER="$CODEX_VERSION"
-else
-  VER="$(codex_latest_version || true)"
-  [ -n "$VER" ] || { VER="$PINNED_VER"; warn "release metadata unreachable — using pinned version $VER"; }
-fi
-case "$VER" in ''|*[!0-9.]*) fail "invalid codex version: '$VER'" ;; esac
-log "Target version: codex $VER"
+fi   # WANT_EMU
 
+# ---------------------------------------------------------------- 3. payload
+# One of two binaries lands in $OPT, and $OPT/ENGINE records which:
+#   native    → $OPT/codex-armv7    (built by this project, runs directly)
+#   emulated  → $OPT/codex-aarch64  (official build, runs under qemu)
+if [ "$ENGINE" = native ]; then PAYLOAD="$OPT/codex-armv7"; else PAYLOAD="$OPT/codex-aarch64"; fi
 CURRENT="$(head -1 "$OPT/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-if [ "$CURRENT" = "$VER" ] && [ -x "$OPT/codex-aarch64" ] && [ -z "${CODEX_FORCE:-}" ]; then
+CURRENT_ENGINE="$(head -1 "$OPT/ENGINE" 2>/dev/null | tr -d '[:space:]' || true)"
+
+if [ "$CURRENT" = "$VER" ] && [ "$CURRENT_ENGINE" = "$ENGINE" ] && [ -x "$PAYLOAD" ] && [ -z "${CODEX_FORCE:-}" ]; then
   log "codex $VER is already installed — refreshing helpers only (CODEX_FORCE=1 to reinstall)."
 elif [ -n "$DRY" ]; then
-  log "would download $CODEX_ASSET ($(codex_asset_urls "$VER" | head -1)) and unpack it to $OPT/codex-aarch64"
+  if [ "$ENGINE" = native ]; then
+    log "would download $(codex_native_url "$VER") and unpack it to $PAYLOAD"
+  else
+    log "would download $CODEX_ASSET ($(codex_asset_urls "$VER" | head -1)) and unpack it to $PAYLOAD"
+  fi
 else
-  # Published checksum for this exact asset — no constant to bump when codex
-  # releases, it comes from the same metadata as the version.
-  ASSET_SHA="$(codex_release_metadata "$VER" | codex_asset_digest || true)"
-
-  log "Downloading codex $VER (linux-aarch64-musl, ~105 MB compressed)…"
-  # /var/tmp, NOT /tmp: /tmp is often a tmpfs (RAM) on Armbian — a 105 MB
-  # download in RAM is asking for an OOM freeze on a 1 GB board.
+  # Downloads go to /var/tmp, NOT /tmp: /tmp is often a tmpfs (RAM) on Armbian
+  # and a 100 MB download in RAM is asking for an OOM freeze on a 1 GB board.
   tmpb="$(mktemp -p /var/tmp codex-smartpi.XXXXXX)"
-  ok=""
-  for url in $(codex_asset_urls "$VER"); do
-    curl -fSL --progress-bar -o "$tmpb" "$url" && { ok=1; break; }
-    warn "download failed from $url — trying the next source."
-  done
-  [ -n "$ok" ] || { rm -f "$tmpb"; fail "could not download codex $VER (all sources failed)"; }
 
-  if [ -n "$ASSET_SHA" ] && command -v sha256sum >/dev/null; then
+  if [ "$ENGINE" = native ]; then
+    # Our own build: the checksum ships next to the asset, produced by the same
+    # workflow run (build/cross-armv7.sh writes it).
+    url="$(codex_native_url "$VER")"
+    log "Downloading the native armv7 build of codex $VER…"
+    curl -fSL --progress-bar -o "$tmpb" "$url" \
+      || { rm -f "$tmpb"; fail "could not download $url"; }
+    ASSET_SHA="$(curl -fsSL --max-time 20 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)"
+  else
+    # Published checksum for this exact asset — no constant to bump when codex
+    # releases, it comes from the same metadata as the version.
+    ASSET_SHA="$(codex_release_metadata "$VER" | codex_asset_digest || true)"
+    log "Downloading codex $VER (linux-aarch64-musl, ~105 MB compressed)…"
+    ok=""
+    for url in $(codex_asset_urls "$VER"); do
+      curl -fSL --progress-bar -o "$tmpb" "$url" && { ok=1; break; }
+      warn "download failed from $url — trying the next source."
+    done
+    [ -n "$ok" ] || { rm -f "$tmpb"; fail "could not download codex $VER (all sources failed)"; }
+  fi
+
+  if [ -n "${ASSET_SHA:-}" ] && command -v sha256sum >/dev/null; then
     echo "$ASSET_SHA  $tmpb" | sha256sum -c --quiet \
       || { rm -f "$tmpb"; fail "codex download checksum mismatch — aborting."; }
     log "checksum verified (sha256 ${ASSET_SHA%"${ASSET_SHA#????????}"}…)"
   else
-    warn "no published checksum available for $CODEX_ASSET — skipping verification."
+    warn "no published checksum available — skipping verification."
   fi
 
-  # Extract straight to its final home (single-file archive): unpacking to a
-  # temp dir and copying would cost 269 MB more on the SD card.
-  log "Unpacking (269 MB)…"
+  # Both tarballs hold exactly one file, so it is extracted straight to its
+  # final home: unpacking to a temp dir and copying would cost as much again on
+  # the SD card.
+  log "Unpacking…"
   if [ -w "$OPT" ]; then
-    tar -xzOf "$tmpb" > "$OPT/codex-aarch64.new"
-    chmod 755 "$OPT/codex-aarch64.new"; mv -f "$OPT/codex-aarch64.new" "$OPT/codex-aarch64"
+    tar -xzOf "$tmpb" > "$PAYLOAD.new"
+    chmod 755 "$PAYLOAD.new"; mv -f "$PAYLOAD.new" "$PAYLOAD"
   else
-    $SUDO sh -c "tar -xzOf '$tmpb' > '$OPT/codex-aarch64.new'"
-    $SUDO chmod 755 "$OPT/codex-aarch64.new"; $SUDO mv -f "$OPT/codex-aarch64.new" "$OPT/codex-aarch64"
+    $SUDO sh -c "tar -xzOf '$tmpb' > '$PAYLOAD.new'"
+    $SUDO chmod 755 "$PAYLOAD.new"; $SUDO mv -f "$PAYLOAD.new" "$PAYLOAD"
   fi
   rm -f "$tmpb"
-  tv="$(mktemp)"; printf '%s\n' "$VER" > "$tv"
-  put "$tv" "$OPT/VERSION" 644; rm -f "$tv"
+  tv="$(mktemp)"; printf '%s\n' "$VER" > "$tv"; put "$tv" "$OPT/VERSION" 644; rm -f "$tv"
+  tv="$(mktemp)"; printf '%s\n' "$ENGINE" > "$tv"; put "$tv" "$OPT/ENGINE" 644; rm -f "$tv"
 fi
 
-# ---------------------------------------------------------------- 3. wrappers
+# ---------------------------------------------------------------- 4. wrappers
 # codex-bin: the real CLI, all 4 cores at low priority, fork engine first.
 # Watch thermals on sustained agentic loads: on this SoC a 4-core emulated run
 # once reached ~102 °C → machine freeze. Throttle without reinstalling:
@@ -261,16 +311,31 @@ fi
 w="$(mktemp)"
 cat > "$w" <<EOF
 #!/bin/sh
-# codex-bin — official codex binary through the 64-on-32 qemu engine.
+# codex-bin — the native armv7 build when it is installed, otherwise the
+# official aarch64 binary through the 64-on-32 qemu engine.
 # Generated by install.sh (Yumi-Lab/codex-cli-smartpi) — do not edit by hand.
+run() { # \$1 = binary, rest = arguments
+  if command -v taskset >/dev/null 2>&1; then
+    exec taskset -c "\${CODEX_CPUS:-0,1,2,3}" nice -n 5 "\$@"
+  fi
+  exec nice -n 5 "\$@"
+}
+
+# Native: no emulator in the picture at all. CODEX_ENGINE=emulated forces the
+# qemu path when both payloads are installed (CODEX_KEEP_EMULATION=1 at install).
+if [ -x $OPT/codex-armv7 ] && [ "\${CODEX_ENGINE:-auto}" != "emulated" ]; then
+  run $OPT/codex-armv7 "\$@"
+fi
+
 Q=$OPT/qemu-aarch64-fork
 case "\${CODEX_QEMU:-fork}" in 7.2|72|static|system) Q=$OPT/qemu-aarch64-static ;; esac
 [ -x "\$Q" ] || Q=$OPT/qemu-aarch64-static
-QEMU_TB_SIZE="\${CODEX_TB_SIZE:-128}"; export QEMU_TB_SIZE
-if command -v taskset >/dev/null 2>&1; then
-  exec taskset -c "\${CODEX_CPUS:-0,1,2,3}" nice -n 5 "\$Q" $OPT/codex-aarch64 "\$@"
+if [ ! -x "\$Q" ] || [ ! -x $OPT/codex-aarch64 ]; then
+  echo "codex: no runnable payload — re-run install.sh (CODEX_ENGINE=emulated for the qemu path)" >&2
+  exit 1
 fi
-exec nice -n 5 "\$Q" $OPT/codex-aarch64 "\$@"
+QEMU_TB_SIZE="\${CODEX_TB_SIZE:-128}"; export QEMU_TB_SIZE
+run "\$Q" $OPT/codex-aarch64 "\$@"
 EOF
 put_if_changed "$BINDIR/codex-bin" "$w" 755 \
   || { [ -x "$BINDIR/codex-bin" ] && warn "cannot rewrite $BINDIR/codex-bin — existing wrapper kept." \
@@ -283,7 +348,7 @@ cat > "$w" <<EOF
 #!/bin/sh
 # codex — OpenAI Codex CLI for armv7l (dispatcher).
 # Generated by install.sh (Yumi-Lab/codex-cli-smartpi) — do not edit by hand.
-if [ "\${CODEX_SOLO:-1}" != "0" ] && command -v pgrep >/dev/null 2>&1; then
+if [ "\${CODEX_SOLO:-1}" != "0" ] && [ ! -x $OPT/codex-armv7 ] && command -v pgrep >/dev/null 2>&1; then
   if pgrep -f 'qemu-aarch64' >/dev/null 2>&1; then
     printf '\033[1;33m[codex]\033[0m another emulated runtime (qemu-aarch64) is already running — on 1 GB of RAM, run one at a time.\n' >&2
   fi
@@ -294,13 +359,13 @@ put_if_changed "$BINDIR/codex" "$w" 755 \
   || { [ -x "$BINDIR/codex" ] && warn "cannot rewrite $BINDIR/codex — existing dispatcher kept." \
        || fail "cannot install $BINDIR/codex (run once as root/sudo first)."; }
 
-# ---------------------------------------------------------------- 4. helpers
+# ---------------------------------------------------------------- 5. helpers
 log "Installing the shared release library and codex-check-update…"
 mkdirp "$OPT/lib"
 install_repo_file lib/codex-release.sh "$OPT/lib/codex-release.sh" 644
 install_repo_file bin/codex-check-update "$BINDIR/codex-check-update" 755
 
-# ---------------------------------------------------------------- 5. config
+# ---------------------------------------------------------------- 6. config
 # Written ONLY when the user has none. codex's Linux sandbox (Landlock+seccomp,
 # or the bundled bwrap) cannot work here: the seccomp filter it installs is
 # written in aarch64 syscall numbers while the kernel is armv7, and both bwrap
@@ -341,7 +406,7 @@ else
     || warn "$CFG exists without sandbox_mode — add  sandbox_mode = \"danger-full-access\"  (codex's own sandbox cannot run under emulation)."
 fi
 
-# ---------------------------------------------------------------- 6. binfmt
+# ---------------------------------------------------------------- 7. binfmt
 # Let the kernel run ANY aarch64 binary through the fork engine: codex re-execs
 # itself (codex-linux-sandbox) and can spawn vendored aarch64 helpers; without
 # this the kernel answers ENOEXEC. Root only, and only when nothing is
@@ -382,7 +447,7 @@ EOF
   fi
 fi
 
-# ---------------------------------------------------------------- 7. earlyoom
+# ---------------------------------------------------------------- 8. earlyoom
 # Anti-freeze safety net: kills the largest process before memory exhaustion
 # (1 GB of RAM + SD-card swap = full machine freeze otherwise). Optional:
 # root/passwordless-sudo only — an unprivileged OTA update silently skips it.
@@ -403,7 +468,7 @@ if [ -z "$DRY" ] && [ "$(id -u)" -eq 0 ] && [ -n "$OPT_OWNER" ] && [ "$OPT_OWNER
   chown -R "$OPT_OWNER" "$OPT" && log "ownership of $OPT returned to $OPT_OWNER"
 fi
 
-# ---------------------------------------------------------------- 8. smoke test
+# ---------------------------------------------------------------- 9. smoke test
 if [ -n "$DRY" ]; then
   log "DRY RUN complete — nothing was written."
   exit 0
