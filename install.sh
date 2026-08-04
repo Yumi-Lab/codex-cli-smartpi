@@ -42,6 +42,7 @@
 #   CODEX_CPUS=0,1        thermal throttle       CODEX_QEMU=7.2    fallback engine
 #   CODEX_TB_SIZE=256     translation cache MiB  CODEX_SOLO=0      no co-tenancy warning
 #   CODEX_OPT=/path       payload prefix         CODEX_BINDIR=/path  wrapper prefix
+#   CODEX_NATIVE_TARBALL=<path|url>  install a native build you produced yourself
 #   CODEX_DRY_RUN=1       resolve + print the plan, write nothing
 #   CODEX_SMOKE=0         skip the final `codex --version`
 #   CODEX_ALLOW_ANY_ARCH=1  run on a non-armv7l host (CI / VM staging only)
@@ -175,11 +176,15 @@ ENGINE="${CODEX_ENGINE:-auto}"
 case "$ENGINE" in
   native|emulated) ;;
   auto)
-    if codex_native_available "$VER"; then ENGINE=native; else ENGINE=emulated; fi
+    if [ -n "${CODEX_NATIVE_TARBALL:-}" ] || codex_native_available "$VER"; then
+      ENGINE=native
+    else
+      ENGINE=emulated
+    fi
     ;;
   *) fail "CODEX_ENGINE must be auto, native or emulated (got '$ENGINE')" ;;
 esac
-if [ "$ENGINE" = native ] && ! codex_native_available "$VER"; then
+if [ "$ENGINE" = native ] && [ -z "${CODEX_NATIVE_TARBALL:-}" ] && ! codex_native_available "$VER"; then
   fail "no native armv7 build published for codex $VER — $(codex_native_url "$VER") is missing. Use CODEX_ENGINE=emulated, or wait for the build workflow."
 fi
 log "Target: codex $VER, engine: $ENGINE"
@@ -256,12 +261,28 @@ else
 
   if [ "$ENGINE" = native ]; then
     # Our own build: the checksum ships next to the asset, produced by the same
-    # workflow run (build/cross-armv7.sh writes it).
-    url="$(codex_native_url "$VER")"
-    log "Downloading the native armv7 build of codex $VER…"
-    curl -fSL --progress-bar -o "$tmpb" "$url" \
-      || { rm -f "$tmpb"; fail "could not download $url"; }
-    ASSET_SHA="$(curl -fsSL --max-time 20 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)"
+    # workflow run (build/cross-armv7.sh writes it). CODEX_NATIVE_TARBALL takes a
+    # local path or a URL instead — how you install a build you made yourself
+    # with build/cross-armv7.sh, and how the native path gets tested before a
+    # release carries the asset.
+    if [ -n "${CODEX_NATIVE_TARBALL:-}" ]; then
+      src="$CODEX_NATIVE_TARBALL"
+      log "Installing the native armv7 build from $src"
+      if [ -f "$src" ]; then
+        cat "$src" > "$tmpb"
+        ASSET_SHA="$(awk '{print $1}' "$src.sha256" 2>/dev/null || true)"
+      else
+        curl -fSL --progress-bar -o "$tmpb" "$src" \
+          || { rm -f "$tmpb"; fail "could not fetch $src"; }
+        ASSET_SHA="$(curl -fsSL --max-time 20 "$src.sha256" 2>/dev/null | awk '{print $1}' || true)"
+      fi
+    else
+      url="$(codex_native_url "$VER")"
+      log "Downloading the native armv7 build of codex $VER…"
+      curl -fSL --progress-bar -o "$tmpb" "$url" \
+        || { rm -f "$tmpb"; fail "could not download $url"; }
+      ASSET_SHA="$(curl -fsSL --max-time 20 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)"
+    fi
   else
     # Published checksum for this exact asset — no constant to bump when codex
     # releases, it comes from the same metadata as the version.
