@@ -23,7 +23,7 @@
 #
 #   CODEX_MAX_PARALLEL=0   disables the limiter entirely (not advised on 1 GB)
 #   CODEX_SLOT_TIMEOUT=n   give up after n seconds of waiting (default 0 = never)
-#   CODEX_SLOT_DIR=path    where the locks live (default /run/codex, else /tmp)
+#   CODEX_SLOT_DIR=path    where the locks live (default /var/tmp/codex-slots)
 
 set -u
 
@@ -32,19 +32,18 @@ MIN_FREE_MB="${CODEX_MIN_FREE_MB:-180}"
 TIMEOUT="${CODEX_SLOT_TIMEOUT:-0}"
 
 # System-wide by default: the gateway service user and a human on SSH must share
-# the same ceiling, or the ceiling is not one.
-slot_dir() {
-  if [ -n "${CODEX_SLOT_DIR:-}" ]; then printf '%s' "$CODEX_SLOT_DIR"; return; fi
-  if [ -d /run ] && { [ -w /run/codex ] 2>/dev/null || mkdir -p /run/codex 2>/dev/null; }; then
-    chmod 1777 /run/codex 2>/dev/null
-    printf '/run/codex'
-  else
-    printf '%s' "${TMPDIR:-/tmp}/codex-slots"
-  fi
-}
-DIR="$(slot_dir)"
+# the same ceiling, or the ceiling is not one. /var/tmp rather than /run — it is
+# world-writable-with-sticky by convention, survives a reboot, and any user can
+# create it. Stale files are harmless: the locks are advisory and die with the
+# process holding them.
+DIR="${CODEX_SLOT_DIR:-/var/tmp/codex-slots}"
 mkdir -p "$DIR/waiting" 2>/dev/null || true
 chmod 1777 "$DIR" "$DIR/waiting" 2>/dev/null || true
+
+# A limiter that cannot write its slots must never take codex down with it: it
+# steps aside and says so. (This is not theoretical — creating the directory as
+# root at install time once made every unprivileged run die on a redirection.)
+usable_dir() { [ -d "$DIR" ] && [ -w "$DIR" ] && [ -w "$DIR/waiting" ]; }
 
 free_mb() {
   # MemAvailable is the honest number: free + reclaimable, what a new process can
@@ -57,7 +56,8 @@ count_running() {
   n=0; i=1
   while [ "$i" -le "$MAX" ]; do
     # A slot whose lock cannot be taken non-blocking is held by a live process.
-    if ! flock -n "$DIR/slot.$i" true 2>/dev/null; then n=$((n + 1)); fi
+    # A slot file that does not exist yet counts as free, not as an error.
+    if [ -e "$DIR/slot.$i" ] && ! flock -n "$DIR/slot.$i" true 2>/dev/null; then n=$((n + 1)); fi
     i=$((i + 1))
   done
   printf '%s' "$n"
@@ -99,6 +99,10 @@ acquire_and_exec() {
     echo "codex-slot: flock is missing (util-linux) — running without a limit" >&2
     exec "$@"
   }
+  usable_dir || {
+    echo "codex-slot: $DIR is not writable — running without a limit" >&2
+    exec "$@"
+  }
 
   marker="$DIR/waiting/$$"
   : > "$marker" 2>/dev/null || true
@@ -111,7 +115,8 @@ acquire_and_exec() {
       i=1
       while [ "$i" -le "$MAX" ]; do
         # Non-blocking: take the first free slot and keep fd 9 open across exec.
-        if exec 9>>"$DIR/slot.$i" && flock -n 9; then
+        # The `:` probe first — a failed `exec` redirection kills a POSIX shell.
+        if : >>"$DIR/slot.$i" 2>/dev/null && exec 9>>"$DIR/slot.$i" && flock -n 9; then
           rm -f "$marker" 2>/dev/null
           trap - EXIT INT TERM
           exec "$@"
