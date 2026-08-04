@@ -234,6 +234,34 @@ codex exec "…"                # a real authenticated turn, watching the temper
 `test/pad-smoke.sh user@pad` runs the measured part again in one pass; add a
 `-J jumphost` in `~/.ssh/config` when the board is behind a VPN.
 
+### Parallelism, measured (2026-08-04)
+
+`codex-slot` was exercised on the board with the native payload:
+
+| Test | Result |
+|---|---|
+| 12 agents launched at once | peak **10 running, 2 queued** — the ceiling held exactly |
+| memory during that burst | `MemAvailable` never below **662 MB**, **0 swap**, 44 °C |
+| RSS of one agent | **107 MB**, of which most is the shared 211 MB binary — 10 agents cost ~165 MB of `MemAvailable` in total |
+| memory floor raised above what is free | every job queues, then exits **75** (*try again later*) with a clear message |
+| `CODEX_MAX_PARALLEL=2` with 5 jobs | exactly 2 running, 3 queued |
+| after the runs | 0 slots held, 0 stale markers, 831 MB free |
+
+**Caveat that matters**: these agents were unauthenticated, so each one died on a
+401 without building any real state. A genuine authenticated turn — model
+context, tool calls, JSON parsing — costs considerably more per process, and the
+ceiling of 10 is above what the board would then hold. That is exactly why the
+memory floor exists and why it, not the count, is the real protection. Re-measure
+the per-agent cost of a real turn before trusting the ceiling alone.
+
+A bug worth remembering: the first version put its slots in `/run/codex`, created
+root-owned by the installer. Every later run as a normal user found the directory
+"usable" (`mkdir -p` returns 0 on an existing directory), tried to open a slot
+inside it, and **died** — a failed `exec` redirection ends a POSIX shell, so
+codex never started at all. The installer's own smoke test runs as root and could
+not see it. Slots now live in `/var/tmp/codex-slots`, writability is tested
+rather than inferred, and the limiter steps aside instead of breaking the CLI.
+
 ### Open questions for the next session on the board
 
 1. Does the **ratatui TUI** render and stay stable over a long session (this is

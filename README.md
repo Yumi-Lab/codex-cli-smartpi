@@ -38,6 +38,7 @@ printenv OPENAI_API_KEY | codex login --with-api-key    # or use an API key
 | `codex exec "task"` | One-shot, non-interactive (scripts, the gateway, cron) |
 | `codex exec --dangerously-bypass-approvals-and-sandbox "task"` | Unattended: no prompt, no sandbox. The only flavour that runs without a human here — **do not** use `--full-auto`, it asks for a sandbox this kernel cannot give (see below). Run it in a directory you control. |
 | `codex-check-update` | OTA probe: `{"cli","installed","engine","latest","update_available"}` |
+| `codex-slot status [--json]` | How many agents are running, how many are queued, how much memory is left |
 | `codex-bin …` | The wrapper without the dispatcher's co-tenancy warning |
 
 Environment knobs, no reinstall needed:
@@ -50,7 +51,9 @@ Environment knobs, no reinstall needed:
 | `CODEX_TB_SIZE=256` | Translation-cache size in MiB (default 128, fork engine only) |
 | `CODEX_KEEP_EMULATION=1` | Install the emulated payload next to the native one |
 | `CODEX_NATIVE_TARBALL=<path\|url>` | Install a native build from a snapshot release, or one you built yourself |
-| `CODEX_SOLO=0` | Silence the "another emulated runtime is running" warning |
+| `CODEX_MAX_PARALLEL=10` | Hard ceiling on concurrent agents — extra ones queue (`0` disables the limiter) |
+| `CODEX_MIN_FREE_MB=180` | Memory floor: no new agent starts below it, whatever the ceiling says |
+| `CODEX_SLOT_TIMEOUT=0` | Give up after n seconds of queuing instead of waiting forever (exit 75) |
 
 ⚠️ **Never run** `codex update` or the upstream installer on this board — both
 would drop a 64-bit binary outside the wrapper. Re-run `install.sh`.
@@ -98,6 +101,26 @@ never picks one up on its own.
 4. Optional, root only: an `aarch64` **binfmt_misc** handler pointing at the fork
    engine, so any aarch64 helper codex re-execs is loaded instead of failing with
    `ENOEXEC` (`echo -1 > /proc/sys/fs/binfmt_misc/qemu-aarch64-yumi` removes it).
+
+## Bounded parallelism
+
+A batch — the gateway, a cron, a loop — could otherwise start ten agents at once,
+and on 1 GB with SD-card swap memory exhaustion freezes the board before the OOM
+killer reacts. Every launch therefore goes through `codex-slot`: a **hard ceiling
+of 10 concurrent agents** (extra ones *wait*, they do not fail) plus a **memory
+floor** — no new agent starts while `MemAvailable` is under 180 MB. The count
+alone would be theatre; the floor is what makes it honest on a board that may
+only fit a handful of real turns.
+
+There is no daemon: slots are `flock` locks held by the codex process itself.
+Nothing to start, nothing to crash, nothing to leak — a lock dies with its
+process, and a limiter that cannot write its slot directory steps aside rather
+than breaking the CLI.
+
+Measured on the board, 12 agents launched simultaneously: peak **exactly 10**
+running with 2 queued, `MemAvailable` never below **662 MB**, **zero swap**,
+44 °C, queue drained by itself. With the floor raised above what is free, jobs
+queue and then exit 75 (*try again later*) instead of taking the board down.
 
 ## Sandboxing is off — read this once
 
