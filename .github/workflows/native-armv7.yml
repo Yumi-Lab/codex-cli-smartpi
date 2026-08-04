@@ -1,0 +1,116 @@
+name: Native armv7 build
+
+# Cross-compiles the official codex source for armv7-unknown-linux-gnueabihf and
+# publishes the binary as a release of THIS repo — the native track, no emulation
+# on the pad. Triggered by hand, or by the daily upstream watcher.
+#
+# The recipe itself lives in build/cross-armv7.sh so it can be reproduced
+# locally: docker run --rm -v "$PWD:/repo" -w /repo rust:latest build/cross-armv7.sh
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "codex version (x.y.z) — empty = newest published upstream"
+        required: false
+      publish:
+        description: "publish a GitHub Release"
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+      publish:
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the target version
+        id: ver
+        run: |
+          set -euo pipefail
+          . lib/codex-release.sh
+          v="${{ inputs.version }}"
+          [ -n "$v" ] || v="$(codex_latest_version)"
+          [ -n "$v" ] || { echo "cannot resolve the newest codex version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building codex $v"
+
+      - name: Rust toolchain + cross tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
+            cmake clang perl pkg-config
+          rustup target add armv7-unknown-linux-gnueabihf
+
+      # The workspace is ~150 crates; without a cache every run pays the full
+      # compile. Keyed on the codex version so a new release starts clean-ish
+      # but still restores the previous run's artifacts.
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/codex-src/codex-rs/target
+          key: armv7-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}
+          restore-keys: |
+            armv7-
+
+      - name: Cross-compile
+        run: bash build/cross-armv7.sh "${{ steps.ver.outputs.version }}" "$GITHUB_WORKSPACE/dist"
+
+      - name: Inspect the artifact
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          cat dist/*.sha256
+          tar -xzf dist/*.tar.gz -C /tmp
+          file /tmp/codex
+          # It must be a 32-bit ARM binary, or the whole point is lost.
+          file -b /tmp/codex | grep -q "ELF 32-bit.*ARM" || { echo "not a 32-bit ARM binary"; exit 1; }
+
+      # Runs the freshly built armv7 binary under qemu-arm — a sanity check that
+      # it starts and answers, before anyone installs it on a board.
+      - name: Smoke test (qemu-arm)
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq qemu-user-static
+          out="$(qemu-arm-static -L /usr/arm-linux-gnueabihf /tmp/codex --version 2>&1)" || {
+            echo "the binary did not run: $out"; exit 1; }
+          echo "$out"
+          echo "$out" | grep -q "${{ steps.ver.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-armv7-${{ steps.ver.outputs.version }}
+          path: dist/*
+
+      - name: Publish the release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.ver.outputs.version }}"
+          tag="v$v"
+          notes="Native **armv7-unknown-linux-gnueabihf** build of the official [codex $v](https://github.com/openai/codex/releases/tag/rust-v$v) source (Apache-2.0), cross-compiled by [build/cross-armv7.sh](https://github.com/${{ github.repository }}/blob/main/build/cross-armv7.sh).
+
+          Installed automatically by \`install.sh\` on an armv7l board — no emulation. Checksums in the \`.sha256\` file."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --title "codex $v — armv7 native" --notes "$notes"
+          fi

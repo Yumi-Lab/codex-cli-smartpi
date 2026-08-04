@@ -1,0 +1,50 @@
+name: Watch upstream releases
+
+# codex ships often. Once a day this asks the same endpoint the pad asks
+# (lib/codex-release.sh), compares it with the newest armv7 release of this repo,
+# and starts a native build when we are behind. Nothing else in the repo needs a
+# version bump — that is the whole point of the shared library.
+on:
+  schedule:
+    - cron: "17 6 * * *"   # 06:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.cmp.outputs.needed }}
+      version: ${{ steps.cmp.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . lib/codex-release.sh
+          upstream="$(codex_latest_version)"
+          [ -n "$upstream" ] || { echo "upstream unreachable — nothing to do"; echo "needed=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          asset="codex-$upstream-armv7-unknown-linux-gnueabihf.tar.gz"
+          if gh release view "v$upstream" --json assets -q '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
+            echo "already built: codex $upstream"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new upstream release: codex $upstream"
+            echo "needed=true"            >> "$GITHUB_OUTPUT"
+            echo "version=$upstream"      >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
+    uses: ./.github/workflows/native-armv7.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      publish: true
+    permissions:
+      contents: write
