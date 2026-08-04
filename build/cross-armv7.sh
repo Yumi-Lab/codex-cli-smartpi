@@ -69,7 +69,8 @@ if [ ! -d "$SRC/.git" ]; then
 else
   log "reusing $SRC (fetching rust-v$VER)"
   git -C "$SRC" fetch --depth 1 origin "rust-v$VER"
-  git -C "$SRC" checkout -q FETCH_HEAD
+  git -C "$SRC" checkout -q -f FETCH_HEAD
+  git -C "$SRC" reset -q --hard FETCH_HEAD   # drop a previous run's [patch] section
 fi
 
 # --- patches ---------------------------------------------------------------
@@ -81,6 +82,40 @@ if compgen -G "$HERE/patches/*.patch" >/dev/null; then
     log "applying $(basename "$p")"
     git -C "$SRC" apply --verbose "$p" || fail "patch $(basename "$p") no longer applies to rust-v$VER"
   done
+fi
+
+# --- third-party crates that assume 64 bits --------------------------------
+# Some dependencies fail to COMPILE on 32-bit ARM for reasons that have nothing
+# to do with codex (see patches/crates/*.patch for the case-by-case reasoning).
+# Each patch is named <crate>-<version>.patch; the crate is downloaded from
+# crates.io, patched, and wired in with [patch.crates-io] so cargo uses our copy
+# instead of the registry one. Nothing is forked and nothing is vendored: if the
+# version moves, the build fails loudly instead of silently patching nothing.
+PATCHED="${CODEX_PATCHED_CRATES:-/tmp/codex-patched-crates}"
+if compgen -G "$HERE/patches/crates/*.patch" >/dev/null; then
+  mkdir -p "$PATCHED"
+  section="$(mktemp)"
+  printf '\n[patch.crates-io]\n' > "$section"
+  for p in "$HERE"/patches/crates/*.patch; do
+    nv="$(basename "$p" .patch)"          # e.g. pagable-0.4.1
+    name="${nv%-*}"; ver="${nv##*-}"
+    # The dependency graph must actually contain that exact version, otherwise
+    # the patch is stale and would be silently ignored.
+    grep -q "^name = \"$name\"" "$SRC/codex-rs/Cargo.lock" \
+      || fail "patches/crates/$nv.patch: $name is no longer a dependency of codex $VER"
+    grep -A1 "^name = \"$name\"" "$SRC/codex-rs/Cargo.lock" | grep -q "^version = \"$ver\"" \
+      || fail "patches/crates/$nv.patch: codex $VER uses a different version of $name — rebase the patch"
+    if [ ! -d "$PATCHED/$nv" ]; then
+      log "patching $nv"
+      curl -fsSL "https://static.crates.io/crates/$name/$nv.crate" | tar -xz -C "$PATCHED"
+      ( cd "$PATCHED/$nv" && patch -p1 --silent < "$p" ) || fail "patches/crates/$nv.patch does not apply"
+    fi
+    printf '%s = { path = "%s" }\n' "$name" "$PATCHED/$nv" >> "$section"
+  done
+  # Appended to the workspace manifest, once (the source tree is re-cloned or
+  # reset for every build, so this cannot accumulate).
+  grep -q '^\[patch.crates-io\]' "$SRC/codex-rs/Cargo.toml" || cat "$section" >> "$SRC/codex-rs/Cargo.toml"
+  rm -f "$section"
 fi
 
 # --- toolchain, take two ---------------------------------------------------

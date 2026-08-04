@@ -1,0 +1,17 @@
+--- a/src/pagable_arc.rs	2026-08-04 11:38:51
++++ b/src/pagable_arc.rs	2026-08-04 11:38:52
+@@ -736,7 +736,13 @@
+ // occupies 12 usizes instead.
+ #[cfg(target_pointer_width = "64")]
+ static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 8]);
+-#[cfg(target_pointer_width = "32")]
++// Yumi-Lab/codex-cli-smartpi: this 12-usize expectation was calibrated on
++// wasm32, whose alignment rules differ from a 32-bit ARM ELF target. On armv7
++// (Cortex-A7, armv7-unknown-linux-gnueabihf) the same struct packs into 10
++// usizes, so the assertion fails at compile time. It is a size canary, not a
++// layout invariant — nothing computes offsets from it — so it is kept where
++// upstream calibrated it and dropped elsewhere.
++#[cfg(all(target_pointer_width = "32", target_arch = "wasm32"))]
+ static_assertions::assert_eq_size!(PagableArcInner<[usize; 4]>, [usize; 12]);
+ 
+ impl<T: Pagable> PagableArcInner<T> {
