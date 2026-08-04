@@ -173,7 +173,11 @@ test/unit.sh                  # offline: metadata parsing, OTA probe, no hardcod
 test/install-armv7-docker.sh  # full install + emulated smoke in a real armv7l userland
 CODEX_DRY_RUN=1 bash install.sh              # resolve everything, write nothing
 CODEX_OPT=/tmp/opt CODEX_BINDIR=/tmp/bin …   # relocate the install, no root required
+CODEX_ALLOW_ANY_ARCH=1 CODEX_SMOKE=0 …       # stage the payload on a non-armv7l host, skip the run
 ```
+
+(The installer refuses a 64-bit host without `CODEX_ALLOW_ANY_ARCH` — that guard
+has its own CI job.)
 
 The native binary is built by [`build/cross-armv7.sh`](build/cross-armv7.sh),
 reproducible anywhere with Docker:
