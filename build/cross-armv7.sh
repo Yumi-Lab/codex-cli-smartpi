@@ -31,14 +31,22 @@ fail() { printf '\033[1;31m[cross-armv7]\033[0m %s\n' "$*" >&2; exit 1; }
 log "building codex $VER for $TARGET with $JOBS jobs"
 
 # --- toolchain -------------------------------------------------------------
-# aws-lc-sys (rustls' crypto provider) is a CMake/C project: it needs cmake, a
-# C++ cross compiler and clang, not just gcc.
+# Debian, because armhf lives in the SAME mirror: `dpkg --add-architecture armhf`
+# then apt gives real armhf -dev packages. Some crates in this workspace are not
+# pure Rust and need them:
+#   openssl-sys → libssl-dev:armhf (no vendored build in this dependency graph)
+#   libz-sys    → zlib1g-dev:armhf
+#   aws-lc-sys  → cmake + a C++ cross compiler + libclang (bindgen has no
+#                 pre-generated bindings for armv7)
 if [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null; then
-  log "installing the cross toolchain"
+  log "installing the cross toolchain (+ armhf multiarch)"
+  dpkg --add-architecture armhf
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
     gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
-    cmake clang perl pkg-config git ca-certificates >/dev/null
+    pkg-config pkg-config-arm-linux-gnueabihf \
+    cmake clang libclang-dev perl git ca-certificates file \
+    libssl-dev:armhf zlib1g-dev:armhf >/dev/null
 fi
 command -v arm-linux-gnueabihf-gcc >/dev/null \
   || fail "missing arm-linux-gnueabihf-gcc — apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross cmake clang"
@@ -89,6 +97,13 @@ export AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
 # The Smart Pi One is a Cortex-A7: NEON + hard float are guaranteed.
 export CFLAGS_armv7_unknown_linux_gnueabihf="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard"
 export CXXFLAGS_armv7_unknown_linux_gnueabihf="$CFLAGS_armv7_unknown_linux_gnueabihf"
+# -sys crates must ask the armhf pkg-config, not the host one, or they find the
+# amd64 libraries and link garbage.
+command -v arm-linux-gnueabihf-pkg-config >/dev/null && export PKG_CONFIG=arm-linux-gnueabihf-pkg-config
+export PKG_CONFIG_ALLOW_CROSS=1
+export OPENSSL_NO_VENDOR=1
+# bindgen (aws-lc-sys) needs the cross headers explicitly.
+export BINDGEN_EXTRA_CLANG_ARGS_armv7_unknown_linux_gnueabihf="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/include/arm-linux-gnueabihf"
 export CARGO_TERM_COLOR=never
 
 log "cargo build --release -p codex-cli --bin codex"

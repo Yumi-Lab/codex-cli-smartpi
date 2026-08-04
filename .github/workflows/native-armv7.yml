@@ -4,8 +4,11 @@ name: Native armv7 build
 # publishes the binary as a release of THIS repo — the native track, no emulation
 # on the pad. Triggered by hand, or by the daily upstream watcher.
 #
-# The recipe itself lives in build/cross-armv7.sh so it can be reproduced
-# locally: docker run --rm -v "$PWD:/repo" -w /repo rust:latest build/cross-armv7.sh
+# The build runs in a Debian container on purpose: several crates in the codex
+# workspace are not pure Rust (openssl-sys, libz-sys, aws-lc-sys) and need real
+# armhf -dev packages, which Debian serves from the same mirror as amd64.
+# Reproduce locally with the exact same command the job runs:
+#   docker run --rm -v "$PWD:/repo" -w /repo rust:bookworm bash build/cross-armv7.sh
 on:
   workflow_dispatch:
     inputs:
@@ -31,7 +34,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
+    container: rust:bookworm
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +43,7 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
           . lib/codex-release.sh
           v="${{ inputs.version }}"
           [ -n "$v" ] || v="$(codex_latest_version)"
@@ -46,26 +51,14 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building codex $v"
 
-      # The Rust target is NOT added here: codex pins its toolchain in
-      # rust-toolchain.toml, so build/cross-armv7.sh adds it from inside the
-      # source tree, on the toolchain that will actually compile.
-      - name: Cross tools
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross \
-            cmake clang perl pkg-config
-
-      # The workspace is ~150 crates; without a cache every run pays the full
-      # compile. Keyed on the codex version so a new release starts clean-ish
-      # but still restores the previous run's artifacts.
+      # ~150 crates: without a cache every run pays the full compile. Keyed on
+      # the codex version, restoring the previous run's artifacts when possible.
       - name: Cache cargo + target
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
             /tmp/codex-src/codex-rs/target
           key: armv7-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}
           restore-keys: |
@@ -89,7 +82,7 @@ jobs:
       - name: Smoke test (qemu-arm)
         run: |
           set -euo pipefail
-          sudo apt-get install -y -qq qemu-user-static
+          apt-get install -y -qq --no-install-recommends qemu-user-static >/dev/null
           out="$(qemu-arm-static -L /usr/arm-linux-gnueabihf /tmp/codex --version 2>&1)" || {
             echo "the binary did not run: $out"; exit 1; }
           echo "$out"
@@ -100,19 +93,33 @@ jobs:
           name: codex-armv7-${{ steps.ver.outputs.version }}
           path: dist/*
 
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+  # Publishing runs on the host (the rust image has no gh CLI) and only ever
+  # touches artifacts the build job produced.
+  publish:
+    needs: build
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-armv7-${{ needs.build.outputs.version }}
+          path: dist
       - name: Publish the release
-        if: ${{ inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          v="${{ steps.ver.outputs.version }}"
-          tag="v$v"
-          notes="Native **armv7-unknown-linux-gnueabihf** build of the official [codex $v](https://github.com/openai/codex/releases/tag/rust-v$v) source (Apache-2.0), cross-compiled by [build/cross-armv7.sh](https://github.com/${{ github.repository }}/blob/main/build/cross-armv7.sh).
+          tag="v$V"
+          notes="Native **armv7-unknown-linux-gnueabihf** build of the official [codex $V](https://github.com/openai/codex/releases/tag/rust-v$V) source (Apache-2.0), cross-compiled by [build/cross-armv7.sh](https://github.com/$REPO/blob/main/build/cross-armv7.sh).
 
-          Installed automatically by \`install.sh\` on an armv7l board — no emulation. Checksums in the \`.sha256\` file."
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
+          Installed automatically by \`install.sh\` on an armv7l board — no emulation, no qemu. Checksum in the \`.sha256\` file."
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$REPO"
           else
-            gh release create "$tag" dist/* --title "codex $v — armv7 native" --notes "$notes"
+            gh release create "$tag" dist/* --title "codex $V — armv7 native" --notes "$notes" --repo "$REPO"
           fi
