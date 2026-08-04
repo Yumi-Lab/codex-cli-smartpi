@@ -63,8 +63,9 @@ jobs:
 
       # ~150 crates: without a cache every run pays the full compile. Keyed on
       # the codex version, restoring the previous run's artifacts when possible.
-      - name: Cache cargo + target
-        uses: actions/cache@v4
+      - name: Restore cargo + target cache
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             /usr/local/cargo/registry
@@ -89,21 +90,36 @@ jobs:
           # It must be a 32-bit ARM binary, or the whole point is lost.
           file -b /tmp/codex | grep -q "ELF 32-bit.*ARM" || { echo "not a 32-bit ARM binary"; exit 1; }
 
-      # Runs the freshly built armv7 binary under qemu-arm — a sanity check that
-      # it starts and answers, before anyone installs it on a board.
-      - name: Smoke test (qemu-arm)
-        run: |
-          set -euo pipefail
-          apt-get install -y -qq --no-install-recommends qemu-user-static >/dev/null
-          out="$(qemu-arm-static -L /usr/arm-linux-gnueabihf /tmp/codex --version 2>&1)" || {
-            echo "the binary did not run: $out"; exit 1; }
-          echo "$out"
-          echo "$out" | grep -q "${{ steps.ver.outputs.version }}"
-
       - uses: actions/upload-artifact@v4
         with:
           name: codex-armv7-${{ steps.ver.outputs.version }}
           path: dist/*
+
+      # Runs the freshly built armv7 binary under qemu-arm — a sanity check that
+      # it starts and answers, before anyone installs it on a board. The binary
+      # is dynamically linked against the armhf multiarch libraries, so the
+      # sysroot is the container root, not the cross toolchain's own prefix.
+      - name: Smoke test (qemu-arm)
+        run: |
+          set -uo pipefail
+          apt-get install -y -qq --no-install-recommends qemu-user-static >/dev/null
+          echo "--- shared libraries the binary needs"
+          arm-linux-gnueabihf-readelf -d /tmp/codex | grep NEEDED || true
+          out="$(qemu-arm-static -L / /tmp/codex --version 2>&1)"; rc=$?
+          echo "rc=$rc out=$out"
+          [ "$rc" -eq 0 ] || { echo "the binary did not run"; exit 1; }
+          # `main` builds report 0.0.0, so only the product name is asserted here.
+          echo "$out" | grep -qi codex
+
+      - name: Save cargo + target cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            /tmp/codex-src/codex-rs/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
     outputs:
       version: ${{ steps.ver.outputs.version }}
