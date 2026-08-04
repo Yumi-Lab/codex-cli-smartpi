@@ -149,10 +149,13 @@ is in [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md).
 - ✅ Installer validated in CI on every push: unit tests, a staged install on an
   x86_64 runner, and a full install **plus emulated smoke test** inside a real
   armv7l userland.
-- ✅ **The native armv7 build works**: validated against upstream `main`,
-  ~47 minutes on a runner, 85 MB tarball, `ELF 32-bit LSB pie executable, ARM`.
-  Pipeline in place end to end (toolchain, armhf multiarch, the `pagable` and
-  `linux-sandbox` 32-bit patches, release publishing, daily watcher).
+- ✅ **The native armv7 build works — and it is ~29× faster to start on the
+  board**: `codex --version` in **0.084 s** native against **2.40 s** emulated,
+  same pad, same wrapper. Built in ~47 min on a runner (85 MB tarball),
+  installed through `install.sh` with `CODEX_NATIVE_TARBALL`, `codex exec` and
+  `codex login --device-auth` both reaching OpenAI over TLS. Pipeline complete
+  (toolchain, armhf multiarch, the `pagable` and `linux-sandbox` 32-bit patches,
+  release publishing, daily watcher).
 - ⏳ codex **0.146.0 cannot be built natively** — it links V8 into the CLI and
   there is no armv7 V8. Upstream already moved v8 out of `code-mode` on `main`,
   so the first release carrying that change will be built and published

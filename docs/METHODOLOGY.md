@@ -201,6 +201,28 @@ Allwinner H3, 4× Cortex-A7, 991 MB RAM, SD card, codex 0.146.0 emulated:
 | Temperature | 39 °C idle, **44 °C** after the run sequence (throttling starts at 75 °C) |
 | Memory | 146 MB used of 991 during the session |
 
+### Native vs emulated, same board, same wrapper (2026-08-04)
+
+The native armv7 binary built by this repo was installed next to the emulated one
+(`CODEX_KEEP_EMULATION=1`) and both were run through the same `codex-bin`:
+
+| | native armv7 | emulated aarch64 |
+|---|---|---|
+| `codex --version` | **0.084 s** | **2.40 s** (~29×) |
+| `codex --help` | 3.1 s first run, then instant | ~3 s |
+| `codex exec` with no credentials | reaches `api.openai.com`, expected 401 | same |
+| `codex login --device-auth` | prints the URL and one-time code | same |
+| Binary on disk | 211 MB | 269 MB (+ 35 MB emulator) |
+| Shared libraries | libssl.so.3, libcrypto.so.3, libz, libgcc_s, libc, libm — all present on DietPi/trixie | none, static musl |
+| Temperature | 41-46 °C | 42-46 °C |
+
+Startup dominates short commands, which is where emulation costs the most; a long
+agent turn is bound by the API, so the gap there will be smaller. The comparison
+is one variable away on a board that has both: `CODEX_ENGINE=emulated codex …`.
+
+Note the native binary tested here was built from `main` and therefore reports
+`0.0.0`; a build from a release tag carries the real version.
+
 Still to do by hand, in an interactive session on the board:
 
 ```bash
