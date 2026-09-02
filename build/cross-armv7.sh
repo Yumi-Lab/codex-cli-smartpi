@@ -67,11 +67,17 @@ command -v cargo >/dev/null || fail "missing cargo (use the rust:latest image, o
 [ -n "$REF" ] || REF="rust-v$VER"
 if [ ! -d "$SRC/.git" ]; then
   log "cloning openai/codex at $REF"
-  git clone --depth 1 --filter=blob:none --no-checkout \
-    --branch "$REF" https://github.com/openai/codex.git "$SRC"
+  # $SRC may already exist and be non-empty: the CI restores the cargo target cache into
+  # $SRC/codex-rs/target BEFORE this step, and `git clone` refuses a non-empty directory
+  # (the daily watch-upstream run went red on exactly that from 2026-08-31). init + fetch
+  # gives the same shallow, blob-less, sparse checkout and leaves the cached target/ alone.
+  mkdir -p "$SRC"
+  git -C "$SRC" init -q
+  git -C "$SRC" remote add origin https://github.com/openai/codex.git
   git -C "$SRC" sparse-checkout init --cone
   git -C "$SRC" sparse-checkout set codex-rs
-  git -C "$SRC" checkout
+  git -C "$SRC" fetch -q --depth 1 --filter=blob:none origin "$REF"
+  git -C "$SRC" checkout -q -f FETCH_HEAD
 else
   log "reusing $SRC (fetching $REF)"
   git -C "$SRC" fetch --depth 1 origin "$REF"
