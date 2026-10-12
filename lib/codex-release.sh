@@ -89,24 +89,3 @@ codex_native_url() {
   printf 'https://github.com/%s/releases/download/v%s/%s\n' \
     "$CODEX_SMARTPI_REPO" "$1" "$(codex_native_asset "$1")"
 }
-
-# Every request to github.com/…/releases goes through here. Measured from a board
-# in Hangzhou (2026-10-12): github.com drops requests in bursts lasting minutes,
-# stalled after the TLS handshake or at the TCP connect. curl retries timeouts and
-# 5xx, never a 404 — that is an answer. A transfer under 10 KB/s for a minute
-# counts as a timeout: the same day the release CDN trickled at 1.2 KB/s, which
-# is 20 hours for the native tarball — failing in minutes is the honest outcome.
-codex_curl() { curl --retry 3 --connect-timeout 15 --speed-limit 10240 --speed-time 60 "$@"; }
-
-# Does a native build exist for that version? (a HEAD request, no download)
-#   0 yes · 1 no, the asset is not published · 2 github.com did not answer.
-# 2 is not an answer, and must never be read as "no native build". Decided on the
-# HTTP status, not curl's exit code: curl 8.7 exits 56 on a 404 HEAD over HTTP/2.
-codex_native_available() {
-  code="$(codex_curl -sIL --max-time "$CODEX_CURL_TIMEOUT" -o /dev/null -w '%{http_code}' "$(codex_native_url "$1")" 2>/dev/null || true)"
-  case "$code" in
-    2??) return 0 ;;
-    404) return 1 ;;
-    *)   return 2 ;;   # 000 = no answer; 403/429 = rate limit, not "absent"
-  esac
-}

@@ -78,6 +78,29 @@ log()  { printf '\033[1;36m[codex-smartpi]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[codex-smartpi]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[codex-smartpi]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Every download goes through here, from the very first one (the release library
+# itself). Measured from a board in Hangzhou (2026-10-12): github.com and
+# raw.githubusercontent.com drop requests in bursts lasting minutes, stalled after
+# the TLS handshake or at the TCP connect, and a curl without a bound waits
+# forever — behind an unattended OTA update, a process stuck for good. curl
+# retries timeouts and 5xx, never a 404: that is an answer. A transfer under
+# 10 KB/s for a minute counts as a timeout: the same day the release CDN trickled
+# at 1.2 KB/s, 20 hours for the native tarball — failing in minutes is honest.
+codex_curl() { curl --retry 3 --connect-timeout 15 --speed-limit 10240 --speed-time 60 "$@"; }
+
+# Does a native build exist for that version? (a HEAD request, no download)
+#   0 yes · 1 no, the asset is not published · 2 github.com did not answer.
+# 2 is not an answer, and must never be read as "no native build". Decided on the
+# HTTP status, not curl's exit code: curl 8.7 exits 56 on a 404 HEAD over HTTP/2.
+codex_native_available() {
+  code="$(codex_curl -sIL --max-time "$CODEX_CURL_TIMEOUT" -o /dev/null -w '%{http_code}' "$(codex_native_url "$1")" 2>/dev/null || true)"
+  case "$code" in
+    2??) return 0 ;;
+    404) return 1 ;;
+    *)   return 2 ;;   # 000 = no answer; 403/429 = rate limit, not "absent"
+  esac
+}
+
 # Fetch one of our repo files to a temp path: local clone if present, else raw
 # GitHub. Used for vendored payloads and for the shared release library.
 fetch_tmp() { # $1 repo-relative path → prints temp file path
@@ -85,7 +108,7 @@ fetch_tmp() { # $1 repo-relative path → prints temp file path
   if [ -n "$HERE" ] && [ -f "$HERE/$1" ]; then
     cat "$HERE/$1" > "$tmpf"
   else
-    curl -fsSL "$RAW/$1" -o "$tmpf" || { rm -f "$tmpf"; return 1; }
+    codex_curl -fsSL "$RAW/$1" -o "$tmpf" || { rm -f "$tmpf"; return 1; }
   fi
   printf '%s' "$tmpf"
 }
