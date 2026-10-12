@@ -83,12 +83,15 @@ So the installer writes, only when the user has no config yet:
 
 ```toml
 sandbox_mode = "danger-full-access"
-approval_policy = "untrusted"
 ```
 
-Approvals become the safety net: codex asks before running a command. The
-trade-off is stated in the README rather than hidden — never run this board with
-both the sandbox off *and* approvals off.
+It used to write `approval_policy = "untrusted"` as well, so approvals were the
+safety net: codex asked before every command. codex 0.149 retired that value as a
+global setting — a config carrying it stops codex from starting, and re-running
+the installer removes the line. Asking before every command now exists only per
+folder (`trust_level = "untrusted"`); elsewhere codex runs commands without asking
+except those it flags as dangerous. The trade-off is stated in the README rather
+than hidden.
 
 `binfmt_misc` registration (root, optional, only if nothing else is registered)
 covers the remaining case: any aarch64 helper codex still re-execs is loaded by

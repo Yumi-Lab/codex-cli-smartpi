@@ -425,7 +425,7 @@ install_repo_file bin/codex-slot          "$BINDIR/codex-slot"          755
 # or the bundled bwrap) cannot work here: the seccomp filter it installs is
 # written in aarch64 syscall numbers while the kernel is armv7, and both bwrap
 # and the re-exec'd codex-linux-sandbox helper are aarch64 binaries the kernel
-# cannot load on its own. Sandbox off + approvals on is the honest combination.
+# cannot load on its own. The sandbox stays off; see README for what still asks.
 USER_NAME="${SUDO_USER:-$(id -un)}"
 USER_HOME="$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6 || true)"
 [ -n "$USER_HOME" ] || USER_HOME="$HOME"
@@ -436,14 +436,13 @@ elif [ ! -e "$CFG" ]; then
   log "Writing default config → $CFG"
   tmpc="$(mktemp)"
   cat > "$tmpc" <<'EOF'
-# Yumi Smart Pi One (armv7l) — codex runs through 64-on-32 qemu user-mode
-# emulation. Its own Linux sandbox cannot work there (aarch64 seccomp filters
-# on an armv7 kernel, aarch64 bwrap/codex-linux-sandbox helpers), so it is
-# disabled and approvals are the safety net: codex asks before running a
-# command. Loosen to "on-request" once you trust a workspace; never leave BOTH
-# the sandbox off and approvals off on this board.
+# Yumi Smart Pi One (armv7l). codex's own Linux sandbox cannot work on this
+# board, so it is off. Since codex 0.149 there is no global "ask before every
+# command" any more: commands run without asking, except those codex flags as
+# dangerous. To be asked before every command in a folder, add:
+#   [projects."/path/to/folder"]
+#   trust_level = "untrusted"
 sandbox_mode = "danger-full-access"
-approval_policy = "untrusted"
 EOF
   # Under `sudo bash install.sh` the script is root while the config belongs to
   # SUDO_USER: create it as root and hand it over, never re-enter sudo.
@@ -459,6 +458,15 @@ EOF
 else
   grep -q 'sandbox_mode' "$CFG" 2>/dev/null \
     || warn "$CFG exists without sandbox_mode — add  sandbox_mode = \"danger-full-access\"  (codex's own sandbox cannot run under emulation)."
+  # Earlier versions of this installer wrote this line; codex 0.149+ refuses to
+  # start with it. Rewritten in place (cat >, same inode) so the owner is kept.
+  if grep -qx 'approval_policy = "untrusted"' "$CFG" 2>/dev/null; then
+    tmpc="$(mktemp)"
+    sed '/^approval_policy = "untrusted"$/d' "$CFG" > "$tmpc" && cat "$tmpc" > "$CFG" \
+      && log "removed approval_policy = \"untrusted\" from $CFG (retired by codex 0.149)" \
+      || warn "remove the line  approval_policy = \"untrusted\"  from $CFG by hand — codex refuses to start with it."
+    rm -f "$tmpc"
+  fi
 fi
 
 # ---------------------------------------------------------------- 7. binfmt
@@ -531,6 +539,10 @@ fi
 if [ "${CODEX_SMOKE:-1}" != "0" ]; then
   log "Check: $(timeout "$SMOKE_TIMEOUT" "$BINDIR/codex" --version 2>&1 | tail -1 \
     || echo "codex --version did not answer in ${SMOKE_TIMEOUT}s — retry on an idle board (README → Troubleshooting)")"
+  # --version does not read the config; this does. An upstream release that
+  # retires a setting passes --version and then refuses to start at all.
+  cfg_err="$(timeout "$SMOKE_TIMEOUT" "$BINDIR/codex" features list 2>&1 >/dev/null)" \
+    || warn "codex cannot load its configuration: $(printf '%s' "$cfg_err" | tail -1)"
 fi
 
 cat <<'MSG'

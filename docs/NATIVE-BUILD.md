@@ -132,7 +132,7 @@ wrappers written; `codex --version` answers in 0.11 s afterwards.
 selects the seccomp target architecture with a `cfg!` chain ending in
 `unimplemented!("unsupported architecture for seccomp filter")` for anything that
 is not x86_64 or aarch64. Native or emulated, this board runs with
-`sandbox_mode = "danger-full-access"` and approvals as the safety net.
+`sandbox_mode = "danger-full-access"` (README: what still asks before a command).
 
 **`arg0` multi-call dispatch is known-broken on arm.** Upstream's own test suite
 says so:

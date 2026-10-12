@@ -128,7 +128,6 @@ queue and then exit 75 (*try again later*) instead of taking the board down.
 
 ```toml
 sandbox_mode = "danger-full-access"
-approval_policy = "untrusted"
 ```
 
 **This is a real trade-off, not a shortcut.** Codex's Linux sandbox cannot work
@@ -136,9 +135,22 @@ on this board: the seccomp filter it builds exists for x86_64 and aarch64 only
 (upstream's [`seccomp.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/seccomp.rs)
 ends in `unimplemented!()` for anything else), and `bwrap` and the re-exec'd
 `codex-linux-sandbox` are 64-bit binaries. A native armv7 build hits the same
-wall. **Approvals are therefore the safety net** — codex asks before running a
-command. Never leave both the sandbox off *and* approvals off on a board exposed
-to the network.
+wall.
+
+**What still asks before running a command.** Since codex 0.149 there is no
+global "ask every time" setting any more (`approval_policy = "untrusted"`, which
+this installer used to write, now stops codex from starting — re-running
+`install.sh` removes that line). With the sandbox off, codex runs commands
+without asking **except those it flags as dangerous**. To be asked before every
+command, mark the folder untrusted in the config (codex's own trust prompt only
+offers "trust" or "quit"):
+
+```toml
+[projects."/home/pi/work"]
+trust_level = "untrusted"
+```
+
+On a board exposed to the network, run codex only in folders marked that way.
 
 ## Updating (OTA)
 
