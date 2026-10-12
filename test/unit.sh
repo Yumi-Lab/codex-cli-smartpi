@@ -72,6 +72,13 @@ is "asset name" "codex-1.2.3-armv7-unknown-linux-gnueabihf.tar.gz" "$(codex_nati
 is "download URL" \
    "https://github.com/Yumi-Lab/codex-cli-smartpi/releases/download/v1.2.3/codex-1.2.3-armv7-unknown-linux-gnueabihf.tar.gz" \
    "$(codex_native_url 1.2.3)"
+# curl stubbed to answer a fixed HTTP status (000 = no answer at all).
+# shellcheck disable=SC2317,SC2329  # the stub is invoked by codex_curl
+probe() { ( code="$1"; curl() { printf '%s' "$code"; }; codex_native_available 1.2.3 ); echo $?; }
+is "asset published (200) → 0"         "0" "$(probe 200)"
+is "asset absent (404) → 1"            "1" "$(probe 404)"
+is "no answer (000) → 2, never absent" "2" "$(probe 000)"
+is "rate-limited (403) → 2"            "2" "$(probe 403)"
 
 echo "no hardcoded install paths (a prefix change must not need a second edit)"
 stray="$(grep -n '/opt/codex' "$REPO/install.sh" | grep -v '^\s*[0-9]*:\s*#' | grep -v 'CODEX_OPT:-/opt/codex' | grep -vc '^$' || true)"

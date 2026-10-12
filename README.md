@@ -147,7 +147,9 @@ to the network.
   update badge. `--latest` / `--installed` / `--engine` print a single value.
 - **Update:** re-run `install.sh` — that IS the updater. It exits fast when
   already newest, verifies the **published sha256**, and keeps the previous
-  binary until the new one is in place.
+  binary until the new one is in place. A network failure changes nothing: no
+  fallback version, no unverified binary, no silent switch to the emulator — it
+  stops and says so (GitHub is filtered in bursts from mainland China).
 - **Automatic upstream tracking:** a daily GitHub Actions cron compares upstream
   against the releases here and builds + publishes the armv7 binary when a new
   version lands. Nothing to bump anywhere; a version that cannot be built for

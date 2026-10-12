@@ -71,7 +71,6 @@ QEMU_FORK_TAG="v9.2.4-yumi.1"
 QEMU_FORK_SHA256="cfdcb2f95299ada9ef5a0d3fb384df0a3a412b06a1c7271fc3e55c7d46680218"
 QEMU_FORK_URL="https://github.com/Yumi-Lab/qemu-64on32-smartpi/releases/download/${QEMU_FORK_TAG}/qemu-aarch64"
 
-PINNED_VER="0.146.0"   # last resort when both metadata sources are unreachable
 NEED_FREE_MB=700       # tarball + new binary + previous binary
 SMOKE_TIMEOUT=180      # first emulated start translates a lot of code
 
@@ -171,24 +170,28 @@ if [ -n "${CODEX_VERSION:-}" ]; then
   VER="$CODEX_VERSION"
 else
   VER="$(codex_latest_version || true)"
-  [ -n "$VER" ] || { VER="$PINNED_VER"; warn "release metadata unreachable — using pinned version $VER"; }
+  # Never a hardcoded fallback: on an update run it would downgrade the board.
+  [ -n "$VER" ] || fail "cannot resolve the newest codex version (offline?) — nothing changed. CODEX_VERSION=x.y.z pins one."
 fi
 case "$VER" in ''|*[!0-9.]*) fail "invalid codex version: '$VER'" ;; esac
 
 ENGINE="${CODEX_ENGINE:-auto}"
 case "$ENGINE" in
-  native|emulated) ;;
-  auto)
-    if [ -n "${CODEX_NATIVE_TARBALL:-}" ] || codex_native_available "$VER"; then
-      ENGINE=native
-    else
-      ENGINE=emulated
-    fi
-    ;;
+  auto|native|emulated) ;;
   *) fail "CODEX_ENGINE must be auto, native or emulated (got '$ENGINE')" ;;
 esac
-if [ "$ENGINE" = native ] && [ -z "${CODEX_NATIVE_TARBALL:-}" ] && ! codex_native_available "$VER"; then
-  fail "no native armv7 build published for codex $VER — $(codex_native_url "$VER") is missing. Use CODEX_ENGINE=emulated, or wait for the build workflow."
+if [ -n "${CODEX_NATIVE_TARBALL:-}" ]; then
+  [ "$ENGINE" = auto ] && ENGINE=native
+elif [ "$ENGINE" != emulated ]; then
+  # An unreachable github.com is not "no native build": falling back to the
+  # emulator would install a different engine — and fetch it from the same host.
+  native_rc=0; codex_native_available "$VER" || native_rc=$?
+  case "$native_rc" in
+    0) ENGINE=native ;;
+    1) [ "$ENGINE" = native ] && fail "no native armv7 build published for codex $VER — $(codex_native_url "$VER") is missing. Use CODEX_ENGINE=emulated, or wait for the build workflow."
+       ENGINE=emulated ;;
+    *) fail "github.com did not answer whether a native build of codex $VER exists (offline, or filtered on this network) — nothing changed, retry later." ;;
+  esac
 fi
 log "Target: codex $VER, engine: $ENGINE"
 
@@ -223,7 +226,7 @@ if [ "$cur_fork" != "$QEMU_FORK_TAG" ] || [ ! -x "$OPT/qemu-aarch64-fork" ] || [
   else
     log "Downloading qemu fork ${QEMU_FORK_TAG} (correct-atomics 64-on-32, ~35 MB)…"
     tmpq="$(mktemp -p /var/tmp codex-qemu-fork.XXXXXX)"
-    if curl -fSL --progress-bar -o "$tmpq" "$QEMU_FORK_URL"; then
+    if codex_curl -fSL --progress-bar -o "$tmpq" "$QEMU_FORK_URL"; then
       if command -v sha256sum >/dev/null \
          && ! echo "$QEMU_FORK_SHA256  $tmpq" | sha256sum -c --quiet 2>/dev/null; then
         rm -f "$tmpq"; warn "qemu fork checksum mismatch — keeping the 7.2-only setup."
@@ -275,16 +278,16 @@ else
         cat "$src" > "$tmpb"
         ASSET_SHA="$(awk '{print $1}' "$src.sha256" 2>/dev/null || true)"
       else
-        curl -fSL --progress-bar -o "$tmpb" "$src" \
+        codex_curl -fSL --progress-bar -o "$tmpb" "$src" \
           || { rm -f "$tmpb"; fail "could not fetch $src"; }
-        ASSET_SHA="$(curl -fsSL --max-time 20 "$src.sha256" 2>/dev/null | awk '{print $1}' || true)"
+        ASSET_SHA="$(codex_curl -fsSL --max-time 20 "$src.sha256" 2>/dev/null | awk '{print $1}' || true)"
       fi
     else
       url="$(codex_native_url "$VER")"
       log "Downloading the native armv7 build of codex $VER…"
-      curl -fSL --progress-bar -o "$tmpb" "$url" \
+      codex_curl -fSL --progress-bar -o "$tmpb" "$url" \
         || { rm -f "$tmpb"; fail "could not download $url"; }
-      ASSET_SHA="$(curl -fsSL --max-time 20 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)"
+      ASSET_SHA="$(codex_curl -fsSL --max-time 20 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)"
     fi
   else
     # Published checksum for this exact asset — no constant to bump when codex
@@ -293,12 +296,17 @@ else
     log "Downloading codex $VER (linux-aarch64-musl, ~105 MB compressed)…"
     ok=""
     for url in $(codex_asset_urls "$VER"); do
-      curl -fSL --progress-bar -o "$tmpb" "$url" && { ok=1; break; }
+      codex_curl -fSL --progress-bar -o "$tmpb" "$url" && { ok=1; break; }
       warn "download failed from $url — trying the next source."
     done
     [ -n "$ok" ] || { rm -f "$tmpb"; fail "could not download codex $VER (all sources failed)"; }
   fi
 
+  # Both release sources publish a checksum: missing means the fetch failed, not
+  # that there is nothing to check. Only a tarball you supplied may come without.
+  if [ -z "${ASSET_SHA:-}" ] && [ -z "${CODEX_NATIVE_TARBALL:-}" ]; then
+    rm -f "$tmpb"; fail "could not fetch the published sha256 of codex $VER — refusing an unverified binary, nothing changed. Retry later."
+  fi
   if [ -n "${ASSET_SHA:-}" ] && command -v sha256sum >/dev/null; then
     echo "$ASSET_SHA  $tmpb" | sha256sum -c --quiet \
       || { rm -f "$tmpb"; fail "codex download checksum mismatch — aborting."; }
