@@ -12,6 +12,10 @@
 #   test/install-armv7-docker.sh                 # install + layout + smoke
 #   CODEX_SMOKE=0 test/install-armv7-docker.sh   # installer only
 #
+# The assertions below are about the emulated payload, so that engine is pinned:
+# with `auto`, the result depended on whether the newest codex had a native
+# build yet, and CI went red the day one was published.
+#
 # Requires: docker (colima or Docker Desktop) with binfmt for arm.
 set -euo pipefail
 
@@ -32,6 +36,7 @@ docker run --rm --platform linux/arm/v7 \
   -e "CODEX_SMOKE_TIMEOUT=$SMOKE_TIMEOUT" \
   -e "CODEX_SMOKE_STRICT=${CODEX_SMOKE_STRICT:-0}" \
   -e "CODEX_VERSION=${CODEX_VERSION:-}" \
+  -e "CODEX_ENGINE=${CODEX_ENGINE:-emulated}" \
   "$IMAGE" bash -euo pipefail -c '
     echo "--- guest arch: $(uname -m)"
     [ "$(uname -m)" = "armv7l" ] || { echo "not an armv7l userland — binfmt missing?"; exit 1; }

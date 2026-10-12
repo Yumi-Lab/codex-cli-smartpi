@@ -45,6 +45,7 @@ jobs:
         env:
           CODEX_ALLOW_ANY_ARCH: "1"     # a runner is not armv7l
           CODEX_SMOKE: "0"              # the payload is aarch64: nothing to run here
+          CODEX_ENGINE: emulated        # what the assertions check; `auto` follows the releases
         run: |
           set -euo pipefail
           export CODEX_OPT="$RUNNER_TEMP/opt/codex" CODEX_BINDIR="$RUNNER_TEMP/bin"
