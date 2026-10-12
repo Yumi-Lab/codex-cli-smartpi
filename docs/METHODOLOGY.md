@@ -62,7 +62,7 @@ codex sandboxes the commands it runs. On Linux that means Landlock + a seccomp
 filter, or the bundled `bwrap`. None of it can work here:
 
 - The seccomp filter is built for a fixed target architecture. Upstream
-  ([`linux-sandbox/src/landlock.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/landlock.rs)):
+  ([`linux-sandbox/src/seccomp.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/seccomp.rs)):
 
   ```rust
   if cfg!(target_arch = "x86_64") { TargetArch::x86_64 }

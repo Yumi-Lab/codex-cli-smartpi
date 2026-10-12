@@ -133,7 +133,7 @@ approval_policy = "untrusted"
 
 **This is a real trade-off, not a shortcut.** Codex's Linux sandbox cannot work
 on this board: the seccomp filter it builds exists for x86_64 and aarch64 only
-(upstream's [`landlock.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/landlock.rs)
+(upstream's [`seccomp.rs`](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/src/seccomp.rs)
 ends in `unimplemented!()` for anything else), and `bwrap` and the re-exec'd
 `codex-linux-sandbox` are 64-bit binaries. A native armv7 build hits the same
 wall. **Approvals are therefore the safety net** — codex asks before running a

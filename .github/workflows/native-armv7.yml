@@ -71,7 +71,7 @@ jobs:
             /usr/local/cargo/registry
             /usr/local/cargo/git
             /tmp/codex-src/codex-rs/target
-          key: armv7-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}
+          key: armv7-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.sh') }}
           restore-keys: |
             armv7-
 

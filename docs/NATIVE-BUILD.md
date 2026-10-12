@@ -128,7 +128,7 @@ wrappers written; `codex --version` answers in 0.11 s afterwards.
 
 ## Two things still worth knowing about a native build
 
-**The sandbox will not exist there either.** `linux-sandbox/src/landlock.rs`
+**The sandbox will not exist there either.** `linux-sandbox/src/seccomp.rs`
 selects the seccomp target architecture with a `cfg!` chain ending in
 `unimplemented!("unsupported architecture for seccomp filter")` for anything that
 is not x86_64 or aarch64. Native or emulated, this board runs with

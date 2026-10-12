@@ -88,11 +88,11 @@ fi
 # --- patches ---------------------------------------------------------------
 # Anything upstream cannot do on 32-bit ARM lives in patches/, applied in order.
 # Keep each one minimal and explain it in its header: this set has to survive
-# every upstream release.
-if compgen -G "$HERE/patches/*.patch" >/dev/null; then
-  for p in "$HERE"/patches/*.patch; do
+# every upstream release, so each one edits by pattern, not by line number.
+if compgen -G "$HERE/patches/*.sh" >/dev/null; then
+  for p in "$HERE"/patches/*.sh; do
     log "applying $(basename "$p")"
-    git -C "$SRC" apply --verbose "$p" || fail "patch $(basename "$p") no longer applies to rust-v$VER"
+    bash "$p" "$SRC" || fail "patch $(basename "$p") no longer applies to $REF"
   done
 fi
 
