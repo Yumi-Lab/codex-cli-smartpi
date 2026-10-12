@@ -7,7 +7,7 @@ for x86_64 and aarch64 only.
 Two ways to get it running on the board, and the installer picks for you:
 
 - **native** — this project cross-compiles the Apache-2.0 source for armv7 and
-  publishes the binary. No emulator. `codex --version` in **0.084 s** on the pad.
+  publishes the binary. No emulator. `codex --version` in **0.16 s** on the pad.
 - **emulated** — the official aarch64 binary under 64-on-32 qemu, available the
   day upstream ships. Same command, **2.40 s**.
 
@@ -62,27 +62,25 @@ would drop a 64-bit binary outside the wrapper. Re-run `install.sh`.
 
 `install.sh` asks the releases of this repo whether a native armv7 build exists
 for the version it resolved. If it does, it installs that and **downloads no
-emulator at all**. Otherwise it falls back to emulation. `codex-check-update`
-reports which one is in use.
+emulator at all**; if there is none, it falls back to emulation; if GitHub does
+not answer, it stops instead of guessing. `codex-check-update` reports which
+engine is in use.
 
-Whether a codex version *can* be built for armv7 comes down to one thing: whether
-the CLI links **V8**, which has no armv7 build. At the current release it does,
-so the board runs emulated today — and upstream has already moved v8 out of the
-CLI's dependency graph on `main`, so the next release will be built and published
-automatically. The whole story: [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md).
+Since **0.147.0** the native build follows upstream: once a day a job builds the
+newest codex release for armv7 and publishes it here. Emulation covers the hours
+between an upstream release and its build, and any version that cannot be built
+for armv7 — up to 0.146.0 the CLI linked **V8**, which has no armv7 build. The
+whole story: [docs/NATIVE-BUILD.md](docs/NATIVE-BUILD.md).
 
-Meanwhile the newest native binary is published as a **snapshot prerelease**
-built from `main`. Install it explicitly — one minute end to end on the board:
+A build of upstream `main` can also be published as a **snapshot prerelease**.
+It reports version `0.0.0` (upstream stamps versions only when it tags) and
+`install.sh` never picks one up on its own — install it explicitly, the checksum
+beside it is verified:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Yumi-Lab/codex-cli-smartpi/main/install.sh | \
   CODEX_NATIVE_TARBALL=<url of the snapshot .tar.gz> bash
 ```
-
-The URL is on the [releases page](https://github.com/Yumi-Lab/codex-cli-smartpi/releases)
-and the checksum beside it is verified during the install. A snapshot reports
-version `0.0.0` (upstream stamps versions only when it tags) and `install.sh`
-never picks one up on its own.
 
 ## What the emulated path does
 
@@ -172,30 +170,34 @@ On a board exposed to the network, run codex only in folders marked that way.
 ## Requirements
 
 armv7l board, Debian/Armbian bookworm or newer, ≥ 1 GB RAM, `curl` and `tar`.
-Disk: **≈ 300 MB** for the native payload (211 MB binary, no emulator),
+Disk: **≈ 350 MB** for the native payload (240 MB binary + 100 MB download),
 **≥ 700 MB** for the emulated one (269 MB binary + 105 MB download + the previous
 version during an update) — the installer checks before touching anything. The
-native build is dynamically linked and needs `libssl.so.3`, `libcrypto.so.3`,
-`libz` and `libgcc_s`, present by default on Debian bookworm/trixie and DietPi.
+native build is dynamically linked and needs `libssl.so.3`, `libcrypto.so.3`
+and `libgcc_s`, present by default on Debian bookworm/trixie and DietPi.
 
 ## Status
 
-Validated on a real Smart Pi One (DietPi / Debian 13 trixie, 2026-08-04):
+Validated on a real Smart Pi One (DietPi / Debian 13 trixie):
 
-| | native armv7 | emulated aarch64 |
+| | native armv7 — 0.162.1, 2026-10-12 | emulated aarch64 — 0.146.0, 2026-08-04 |
 |---|---|---|
-| `codex --version` | **0.084 s** | **2.40 s** |
-| `codex exec`, no credentials | reaches `api.openai.com` over TLS + WebSockets, expected 401 | same |
+| Update from the published release | 1346 s on a ~75 KB/s home line, checksum verified | — |
+| `codex --version` | **0.16 s** | **2.40 s** |
+| `codex exec`, no credentials | reaches `wss://api.openai.com`, expected 401 | same |
 | `codex login --device-auth` | prints URL + one-time code | same |
-| On disk | 211 MB | 269 MB + 35 MB emulator |
-| Temperature | 41-46 °C | 42-46 °C |
+| On disk | 240 MB | 269 MB + 35 MB emulator |
+| Temperature | 36-37 °C | 42-46 °C |
 
-Also green: the cross-build pipeline (~47 min on a runner, 85 MB tarball), the
+Also green: the cross-build pipeline (~54 min on a runner, 100 MB tarball), the
 daily watcher, and CI on every push — unit tests, a staged install on x86_64, and
 a full install **plus emulated smoke test** inside a real armv7l userland.
 
 Not yet exercised on the board: the TUI over a long session, an authenticated
-agent turn, thermals under sustained load. `test/pad-smoke.sh user@pad` collects
+agent turn, thermals under sustained load. **From mainland China the install
+does not complete today**: measured from Hangzhou on 2026-10-12, github.com and
+raw.githubusercontent.com dropped requests for minutes at a time and the release
+CDN delivered 1.2 KB/s — the installer stops with an error instead of hanging. `test/pad-smoke.sh user@pad` collects
 the measurable part in one pass.
 
 Full reasoning, measurements and dead ends: [docs/METHODOLOGY.md](docs/METHODOLOGY.md).

@@ -79,6 +79,14 @@ rather than dying twenty minutes later on what reads like a network error:
               (CODEX_REF=main), or wait for the next upstream release.
 ```
 
+**6. `codex-linux-sandbox` assumes 64-bit syscall numbers.** `libc::SYS_*` is
+i64 on 64-bit targets and i32 on arm, while seccompiler's rule map is keyed by
+i64 — 23 errors of one kind — and the architecture selection ends in
+`unimplemented!()`. [`patches/0001-linux-sandbox-build-on-32-bit-arm.sh`](../patches/0001-linux-sandbox-build-on-32-bit-arm.sh)
+converts the numbers and returns an error instead of panicking. It edits by
+pattern: upstream keeps reshaping this code, and the diff it replaced stopped
+applying at rust-v0.155.0 — no native build from 2026-09-18 to 2026-10-12.
+
 ## It builds
 
 Validated in CI on 2026-08-04 against upstream `main` (`CODEX_REF=main`), after
@@ -115,16 +123,14 @@ wrappers written; `codex --version` answers in 0.11 s afterwards.
 
 ## What this means in practice
 
-- **codex 0.146.0 cannot be built natively for armv7** — V8 is in the CLI graph.
-  The pad runs the emulated aarch64 binary, which is what `install.sh` installs
-  today, and it works (see the measured numbers in
-  [METHODOLOGY.md](METHODOLOGY.md)).
-- **The moment upstream ships a release without V8 in the CLI graph**, the daily
-  watcher builds it, publishes an armv7 asset, and `install.sh` starts installing
-  the native binary on its own — `CODEX_ENGINE=auto` asks the release, no manual
-  step, nothing to bump.
-- Everything else on the way there is already solved and committed: toolchain,
-  multiarch, the `pagable` patch, the ssh rewrite, the release/publish pipeline.
+- **Up to 0.146.0, no native build was possible** — V8 was in the CLI graph.
+- **From 0.147.0 (2026-08-07) on, the native build follows upstream.** Once a
+  day the watcher compares the newest upstream release with the releases here,
+  builds it if it is missing and publishes it; `install.sh` then installs it on
+  its own — `CODEX_ENGINE=auto` asks the release, nothing to bump. Only the
+  newest release is built: versions superseded within the same day are skipped.
+- Emulation remains the fallback for the hours between an upstream release and
+  its build, and for any future version that cannot be built for armv7.
 
 ## Two things still worth knowing about a native build
 
